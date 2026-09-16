@@ -385,6 +385,34 @@ Start feature work from `dev` unless instructed otherwise.
 
 Do not push feature work directly to `main`.
 
+## Linear workflow
+
+SiteThread development is managed in Linear.
+
+When Linear access is available, use it as part of the normal development workflow. Before implementing a feature or fix:
+
+1. Read the relevant Linear issue.
+2. Treat its requirements and acceptance criteria as the task scope.
+3. Check related issues, dependencies, and project context when necessary.
+4. Do not silently expand the task beyond the issue without approval.
+
+When working from a Linear issue, preserve the issue ID where practical. For example:
+
+```text
+COD-17
+branch: feat/COD-17-livepeer-processing
+PR: COD-17 — Implement Livepeer processing pipeline
+```
+
+During implementation:
+
+- keep the Linear issue aligned with the actual work;
+- surface meaningful blockers or changed assumptions;
+- reference the resulting pull request when appropriate;
+- do not mark work complete unless the implementation and required validation are actually complete.
+
+GitHub is the source of truth for code. Linear is the source of truth for planned work, task scope, progress, and implementation tracking. If Linear and repository documentation disagree on an architectural or product decision, surface the conflict instead of guessing.
+
 Keep changes scoped to the requested task.
 
 Before editing:
