@@ -865,7 +865,7 @@ No dedicated staging environment is required during the hackathon.
 
 # 23. Upload Constraints for the MVP
 
-The [golden-path input assumptions](golden-path.md#minimum-input-and-operating-assumptions) define the required reference walkthrough and distinguish it from broader upload targets. Validate the deployed media path before advertising supported formats or limits; provider-specific constraints remain in the Livepeer integration document.
+COD-16 implements a deliberately narrow upload boundary: `video/mp4` with a maximum object size of 100 MiB. The shared policy lives in `src/lib/walkthroughs/upload-policy.ts` and is used by both the API and the upload UI. The boundary checks the declared MIME type, `.mp4` extension, and positive byte size; it does not claim to validate video codec, audio codec, or duration. Those checks remain downstream processing gates and must be verified before the live demo input is advertised as ready. Uploads go directly from the browser to private R2 through a short-lived presigned PUT URL, then the server verifies the object with `HEAD` before queueing the durable `ProcessingRun`.
 
 ---
 

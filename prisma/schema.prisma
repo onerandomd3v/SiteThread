@@ -66,6 +66,7 @@ model Project {
 model Walkthrough {
   id                 String              @id @default(cuid())
   projectId          String
+  uploadIntentKey    String?             @unique
   title              String?
   capturedAt         DateTime?
   durationSeconds    Float?
