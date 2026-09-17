@@ -8,7 +8,7 @@ Use this document for product scope and acceptance. Use [architecture.md](archit
 
 ## Primary user and outcome
 
-The primary user is a construction professional responsible for a site walk and its record, such as a site supervisor or project engineer. The same person captures or uploads the walkthrough, reviews the findings, and prepares the report in this MVP.
+The primary user is a site supervisor, site manager, or superintendent responsible for the site walk and its record. The project engineer is a secondary user. The same person captures or uploads the walkthrough, reviews the findings, and prepares the report in this MVP.
 
 Their job is to turn what they saw and said on site into a concise project record that another professional can inspect. Success means less reconstruction of scattered media while retaining source context and human authority. The product should be understandable through **Project → Walkthrough → Findings → Evidence → Report** on a phone-sized screen.
 
