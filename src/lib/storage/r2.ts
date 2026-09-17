@@ -49,7 +49,7 @@ export class R2MediaStorage implements MediaStorage {
     };
   }
 
-  async verifyUpload(input: { objectKey: string; expectedByteSize: number; expectedMimeType: string }): Promise<{ byteSize: number; mimeType?: string; etag?: string }> {
+  async verifyUpload(input: { objectKey: string; expectedByteSize: number; expectedMimeType: string }): Promise<{ byteSize: number; mimeType?: string; etag: string }> {
     const { client, bucket } = createR2Client();
     try {
       const result = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: input.objectKey }));
@@ -63,6 +63,9 @@ export class R2MediaStorage implements MediaStorage {
       if (!hasMp4Ftyp(signatureBytes)) {
         throw new SiteThreadError("The uploaded media is not a valid MP4 container.", "MEDIA_UNAVAILABLE");
       }
+      if (!result.ETag) {
+        throw new SiteThreadError("The uploaded media could not be verified yet.", "MEDIA_UNAVAILABLE", true);
+      }
       return { byteSize, mimeType, etag: result.ETag };
     } catch (error) {
       if (error instanceof SiteThreadError) throw error;
@@ -70,7 +73,7 @@ export class R2MediaStorage implements MediaStorage {
     }
   }
 
-  async promoteUpload(input: { sourceObjectKey: string; destinationObjectKey: string; sourceETag?: string; mimeType: string }): Promise<void> {
+  async promoteUpload(input: { sourceObjectKey: string; destinationObjectKey: string; sourceETag: string; mimeType: string }): Promise<void> {
     const { client, bucket } = createR2Client();
     try {
       await client.send(new CopyObjectCommand({

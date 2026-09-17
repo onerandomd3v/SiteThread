@@ -97,4 +97,20 @@ describe("walkthrough upload service", () => {
     expect(promoted).toBe(false);
     expect(asset.status).toBe("PENDING");
   });
+
+  it("does not promote when verification has no source ETag", async () => {
+    const asset = { id: "asset-1", walkthroughId: "walk-1", kind: "SOURCE_VIDEO", status: "PENDING", objectKey: "final.mp4", stagingObjectKey: "staging.mp4", mimeType: "video/mp4", byteSize: 1024 };
+    let promoted = false;
+    const database = {
+      walkthrough: { findUnique: async () => ({ id: "walk-1", mediaAssets: [asset], processingRuns: [] }) },
+    } as unknown as typeof db;
+    const storage = storageFake({
+      verifyUpload: async () => ({ byteSize: 1024, mimeType: "video/mp4", etag: "" }),
+      promoteUpload: async () => { promoted = true; },
+    });
+
+    await expect(finalizeUpload("walk-1", storage, database)).rejects.toMatchObject({ code: "MEDIA_UNAVAILABLE" });
+    expect(promoted).toBe(false);
+    expect(asset.status).toBe("PENDING");
+  });
 });

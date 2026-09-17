@@ -56,7 +56,6 @@ export async function createUploadIntent(
 
   const walkthroughId = randomUUID();
   const assetId = randomUUID();
-  const key = durableObjectKey(walkthroughId, assetId);
   const stagingKey = stagingObjectKey(walkthroughId, assetId);
   try {
     await database.$transaction([
@@ -96,6 +95,7 @@ export async function finalizeUpload(walkthroughId: string, storage: MediaStorag
   if (!asset.byteSize) throw new SiteThreadError("The upload size is missing.", "INVALID_INPUT");
   const destinationKey = durableObjectKey(walkthroughId, asset.id);
   const verified = await storage.verifyUpload({ objectKey: asset.stagingObjectKey, expectedByteSize: asset.byteSize, expectedMimeType: asset.mimeType });
+  if (!verified.etag) throw new SiteThreadError("The uploaded media could not be verified yet.", "MEDIA_UNAVAILABLE", true);
   await storage.promoteUpload({ sourceObjectKey: asset.stagingObjectKey, destinationObjectKey: destinationKey, sourceETag: verified.etag, mimeType: asset.mimeType });
   const queued = await database.$transaction(async (tx) => {
     await tx.mediaAsset.update({ where: { id: asset.id }, data: { status: MediaAssetStatus.AVAILABLE, objectKey: destinationKey, stagingObjectKey: null, byteSize: verified.byteSize } });
