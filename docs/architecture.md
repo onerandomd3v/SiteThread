@@ -409,8 +409,7 @@ Example:
 ```ts
 interface MediaIntelligenceProvider {
   transcribe(input: MediaInput): Promise<Transcript>;
-  analyzeImage(input: ImageInput): Promise<VisionResult>;
-  analyzeVideo?(input: VideoInput): Promise<VideoResult>;
+  analyzeVisual(input: VisualAnalysisInput): Promise<VisionResult>;
 }
 ```
 

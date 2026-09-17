@@ -198,11 +198,31 @@ model ReportObservation {
   observationId String
   text          String
   type          ObservationType
+  reviewState   ReviewState
+  reviewerId    String?
+  reviewedAt    DateTime?
   sortOrder     Int
   createdAt     DateTime        @default(now())
   report        Report          @relation(fields: [reportId], references: [id], onDelete: Cascade)
   observation   Observation     @relation(fields: [observationId], references: [id], onDelete: Restrict)
+  evidence      ReportObservationEvidence[]
 
   @@unique([reportId, observationId])
   @@index([reportId, sortOrder])
+}
+
+model ReportObservationEvidence {
+  id                  String           @id @default(cuid())
+  reportObservationId String
+  sourceWalkthroughId String
+  sourceEvidenceId    String
+  mediaAssetId        String?
+  transcriptSegmentId String?
+  sourceStartSeconds  Float?
+  sourceEndSeconds    Float?
+  label               String?
+  createdAt           DateTime         @default(now())
+  reportObservation  ReportObservation @relation(fields: [reportObservationId], references: [id], onDelete: Cascade)
+
+  @@index([reportObservationId])
 }
