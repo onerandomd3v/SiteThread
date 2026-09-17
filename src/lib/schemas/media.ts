@@ -54,3 +54,32 @@ export const ReportEligibleFindingSchema = z.object({
   evidence: z.array(EvidenceReferenceSchema).min(1),
 });
 export type ReportEligibleFinding = z.infer<typeof ReportEligibleFindingSchema>;
+
+export const ReportEvidenceSnapshotSchema = z.object({
+  sourceWalkthroughId: z.string().min(1),
+  sourceEvidenceId: z.string().min(1),
+  mediaAssetId: z.string().min(1).optional(),
+  transcriptSegmentId: z.string().min(1).optional(),
+  startSeconds: z.number().finite().nonnegative().optional(),
+  endSeconds: z.number().finite().nonnegative().optional(),
+  label: z.string().trim().min(1).optional(),
+}).superRefine((value, ctx) => {
+  if (!value.mediaAssetId && !value.transcriptSegmentId) {
+    ctx.addIssue({ code: "custom", message: "A report evidence snapshot needs a media or transcript reference." });
+  }
+  if (value.startSeconds !== undefined && value.endSeconds !== undefined && value.endSeconds < value.startSeconds) {
+    ctx.addIssue({ code: "custom", path: ["endSeconds"], message: "Evidence end must be after its start." });
+  }
+});
+export type ReportEvidenceSnapshot = z.infer<typeof ReportEvidenceSnapshotSchema>;
+
+export const ReportObservationSnapshotSchema = z.object({
+  id: z.string().min(1),
+  text: z.string().trim().min(1),
+  type: ObservationTypeSchema,
+  reviewState: z.enum(["CONFIRMED", "EDITED"]),
+  reviewerId: z.string().min(1).optional(),
+  reviewedAt: z.coerce.date().optional(),
+  evidence: z.array(ReportEvidenceSnapshotSchema).min(1),
+});
+export type ReportObservationSnapshot = z.infer<typeof ReportObservationSnapshotSchema>;

@@ -226,7 +226,7 @@ The internal contract remains:
 interface MediaIntelligenceProvider {
   discoverCapabilities(): Promise<MediaCapabilities>;
   transcribe(input: TranscriptionInput): Promise<Transcript>;
-  analyzeImage(input: VisionInput): Promise<VisionResult>;
+  analyzeVisual(input: VisualAnalysisInput): Promise<VisionResult>;
 }
 ```
 

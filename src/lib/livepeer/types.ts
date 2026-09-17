@@ -13,7 +13,7 @@ export interface TranscriptionInput {
   idempotencyKey: string;
 }
 
-export interface VisionInput {
+export interface VisualAnalysisInput {
   walkthroughId: string;
   mediaUrl: string;
   sourceStartSeconds?: number;
@@ -24,7 +24,7 @@ export interface VisionInput {
 export interface MediaIntelligenceProvider {
   discoverCapabilities(): Promise<MediaCapabilities>;
   transcribe(input: TranscriptionInput): Promise<ProviderTranscriptResult>;
-  analyzeImage(input: VisionInput): Promise<ProviderVisionResult>;
+  analyzeVisual(input: VisualAnalysisInput): Promise<ProviderVisionResult>;
 }
 
 /** COD-14/COD-32 keep transport and exact provider payloads behind this boundary. */

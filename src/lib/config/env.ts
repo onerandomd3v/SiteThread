@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-const optionalSecret = z.string().trim().min(1).optional();
+const optionalSecret = z.preprocess(
+  (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().trim().min(1).optional(),
+);
 
 const serverEnvSchema = z.object({
   DATABASE_URL: z.string().url(),
@@ -17,6 +20,6 @@ const serverEnvSchema = z.object({
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 
-export function parseServerEnv(values: NodeJS.ProcessEnv = process.env): ServerEnv {
+export function parseServerEnv(values: Record<string, string | undefined> = process.env): ServerEnv {
   return serverEnvSchema.parse(values);
 }
