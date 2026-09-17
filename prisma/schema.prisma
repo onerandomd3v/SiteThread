@@ -88,6 +88,7 @@ model MediaAsset {
   kind               MediaAssetKind
   status             MediaAssetStatus      @default(PENDING)
   objectKey          String
+  stagingObjectKey   String?
   mimeType           String
   byteSize           Int?
   durationSeconds    Float?

@@ -1,10 +1,21 @@
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { parseServerEnv } from "@/lib/config/env";
 import { SiteThreadError } from "@/lib/errors";
 import type { MediaStorage, MediaObject, UploadIntent } from "./types";
 
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+const SIGNATURE_RANGE = "bytes=0-63";
+
+export function hasMp4Ftyp(bytes: Uint8Array): boolean {
+  const limit = Math.min(bytes.length - 12, 32);
+  for (let offset = 0; offset <= limit; offset += 1) {
+    if (bytes[offset + 4] !== 0x66 || bytes[offset + 5] !== 0x74 || bytes[offset + 6] !== 0x79 || bytes[offset + 7] !== 0x70) continue;
+    const boxSize = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0);
+    return boxSize >= 16 && offset + 12 <= bytes.length;
+  }
+  return false;
+}
 
 function createR2Client(): { client: S3Client; bucket: string } {
   const env = parseServerEnv();
@@ -38,20 +49,46 @@ export class R2MediaStorage implements MediaStorage {
     };
   }
 
-  async verifyUpload(input: { objectKey: string; expectedByteSize: number; expectedMimeType: string }): Promise<{ byteSize: number; mimeType?: string }> {
+  async verifyUpload(input: { objectKey: string; expectedByteSize: number; expectedMimeType: string }): Promise<{ byteSize: number; mimeType?: string; etag?: string }> {
     const { client, bucket } = createR2Client();
     try {
       const result = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: input.objectKey }));
       const byteSize = result.ContentLength ?? 0;
       const mimeType = result.ContentType;
-      if (byteSize !== input.expectedByteSize || (mimeType && mimeType !== input.expectedMimeType)) {
+      if (byteSize !== input.expectedByteSize || mimeType !== input.expectedMimeType) {
         throw new SiteThreadError("The uploaded media did not match the declared file.", "MEDIA_UNAVAILABLE", true);
       }
-      return { byteSize, mimeType };
+      const ranged = await client.send(new GetObjectCommand({ Bucket: bucket, Key: input.objectKey, Range: SIGNATURE_RANGE }));
+      const signatureBytes = ranged.Body ? await ranged.Body.transformToByteArray() : new Uint8Array();
+      if (!hasMp4Ftyp(signatureBytes)) {
+        throw new SiteThreadError("The uploaded media is not a valid MP4 container.", "MEDIA_UNAVAILABLE");
+      }
+      return { byteSize, mimeType, etag: result.ETag };
     } catch (error) {
       if (error instanceof SiteThreadError) throw error;
       throw new SiteThreadError("The uploaded media could not be verified yet.", "MEDIA_UNAVAILABLE", true, { cause: error });
     }
+  }
+
+  async promoteUpload(input: { sourceObjectKey: string; destinationObjectKey: string; sourceETag?: string; mimeType: string }): Promise<void> {
+    const { client, bucket } = createR2Client();
+    try {
+      await client.send(new CopyObjectCommand({
+        Bucket: bucket,
+        Key: input.destinationObjectKey,
+        CopySource: encodeURIComponent(`${bucket}/${input.sourceObjectKey}`),
+        CopySourceIfMatch: input.sourceETag,
+        ContentType: input.mimeType,
+        MetadataDirective: "REPLACE",
+      }));
+    } catch (error) {
+      throw new SiteThreadError("The verified media could not be finalized.", "MEDIA_UNAVAILABLE", true, { cause: error });
+    }
+  }
+
+  async deleteObject(input: { objectKey: string }): Promise<void> {
+    const { client, bucket } = createR2Client();
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: input.objectKey }));
   }
 
   async createReadUrl(input: { assetId: string; expiresInSeconds: number }): Promise<string> {

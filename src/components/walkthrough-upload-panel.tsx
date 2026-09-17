@@ -38,6 +38,7 @@ export function WalkthroughUploadPanel() {
   const [walkthroughId, setWalkthroughId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [projectsLoading, setProjectsLoading] = useState(true);
+  const [uploadIntentKey, setUploadIntentKey] = useState<string | null>(null);
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === projectId), [projects, projectId]);
 
@@ -63,6 +64,7 @@ export function WalkthroughUploadPanel() {
       const result = await readJson<{ project: Project }>(await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: newProjectName }) }));
       setProjects((current) => [result.project, ...current]);
       setProjectId(result.project.id);
+      setUploadIntentKey(null);
       setNewProjectName("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The project could not be created.");
@@ -73,13 +75,21 @@ export function WalkthroughUploadPanel() {
     if (!projectId || !file) return;
     const fileError = fileValidationMessage(file);
     if (fileError) { setError(fileError); return; }
+    const idempotencyKey = uploadIntentKey ?? crypto.randomUUID();
+    if (!uploadIntentKey) setUploadIntentKey(idempotencyKey);
     setBusy(true); setError(null); setMessage("Preparing a private upload…"); setProgress(0); setRun(null);
     try {
-      const intent = await readJson<{ walkthroughId: string; uploadUrl: string; requiredHeaders: Record<string, string> }>(await fetch(`/api/projects/${projectId}/walkthroughs/upload-intent`, {
+      const intent = await readJson<{ walkthroughId: string; uploadUrl: string | null; requiredHeaders: Record<string, string> }>(await fetch(`/api/projects/${projectId}/walkthroughs/upload-intent`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, mimeType: file.type, byteSize: file.size, idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ fileName: file.name, mimeType: file.type, byteSize: file.size, idempotencyKey }),
       }));
       setWalkthroughId(intent.walkthroughId);
+      if (!intent.uploadUrl) {
+        const existing = await readJson<{ run: Run | null }>(await fetch(`/api/walkthroughs/${intent.walkthroughId}/status`, { cache: "no-store" }));
+        setRun(existing.run);
+        setMessage("This upload intent is already finalized; no new browser upload URL was issued.");
+        return;
+      }
       setMessage("Uploading directly to private storage…");
       await uploadWithProgress(intent.uploadUrl, file, intent.requiredHeaders, setProgress);
       setMessage("Verifying the upload and queueing processing…");
@@ -111,7 +121,7 @@ export function WalkthroughUploadPanel() {
         </div>
         <label className="grid gap-2 text-sm font-medium text-slate-700">
           Existing project
-          <select value={projectId} onChange={(event) => setProjectId(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2" disabled={busy || projectsLoading}>
+          <select value={projectId} onChange={(event) => { setProjectId(event.target.value); setUploadIntentKey(null); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2" disabled={busy || projectsLoading}>
             <option value="">Select a project</option>
             {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
@@ -126,7 +136,7 @@ export function WalkthroughUploadPanel() {
       <div className="space-y-4">
         <label className="grid gap-2 text-sm font-medium text-slate-700">
           Walkthrough video
-          <input type="file" accept="video/mp4,.mp4" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="block w-full rounded-lg border border-slate-300 p-3 text-sm" disabled={busy} />
+          <input type="file" accept="video/mp4,.mp4" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setUploadIntentKey(null); }} className="block w-full rounded-lg border border-slate-300 p-3 text-sm" disabled={busy} />
         </label>
         {file && <p className="text-sm text-slate-600">{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</p>}
         <button type="button" onClick={() => void startUpload()} disabled={busy || !selectedProject || !file} className="w-full rounded-lg bg-emerald-700 px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Working…" : "Upload walkthrough"}</button>

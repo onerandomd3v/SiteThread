@@ -7,8 +7,12 @@ import type { MediaStorage } from "@/lib/storage/types";
 import { r2MediaStorage } from "@/lib/storage/r2";
 import { MAX_WALKTHROUGH_UPLOAD_BYTES, UploadIntentRequestSchema, type UploadIntentRequest } from "./upload-policy";
 
-function objectKey(walkthroughId: string, assetId: string): string {
+function durableObjectKey(walkthroughId: string, assetId: string): string {
   return `walkthroughs/${walkthroughId}/source/${assetId}.mp4`;
+}
+
+function stagingObjectKey(walkthroughId: string, assetId: string): string {
+  return `walkthroughs/${walkthroughId}/staging/${assetId}.mp4`;
 }
 
 function publicRun(run: { id: string; walkthroughId: string; status: ProcessingStatus; retryCount: number; failedStep: string | null; errorCode: string | null; errorMessage: string | null; updatedAt: Date }) {
@@ -42,17 +46,22 @@ export async function createUploadIntent(
     if (!asset || asset.byteSize !== parsed.byteSize || asset.mimeType !== parsed.mimeType) {
       throw new SiteThreadError("The upload intent does not match the original file.", "INVALID_INPUT");
     }
-    const signed = await storage.createUploadIntent({ objectKey: asset.objectKey, mimeType: asset.mimeType });
+    if (asset.status === MediaAssetStatus.AVAILABLE) {
+      return { walkthroughId: existing.id, assetId: asset.id, runId: run?.id, objectKey: asset.objectKey, uploadUrl: null, expiresAt: null, requiredHeaders: {} };
+    }
+    if (!asset.stagingObjectKey) throw new SiteThreadError("The upload staging record is incomplete.", "INTERNAL_ERROR");
+    const signed = await storage.createUploadIntent({ objectKey: asset.stagingObjectKey, mimeType: asset.mimeType });
     return { walkthroughId: existing.id, assetId: asset.id, runId: run?.id, objectKey: asset.objectKey, uploadUrl: signed.uploadUrl, expiresAt: signed.expiresAt, requiredHeaders: signed.requiredHeaders };
   }
 
   const walkthroughId = randomUUID();
   const assetId = randomUUID();
-  const key = objectKey(walkthroughId, assetId);
+  const key = durableObjectKey(walkthroughId, assetId);
+  const stagingKey = stagingObjectKey(walkthroughId, assetId);
   try {
     await database.$transaction([
       database.walkthrough.create({ data: { id: walkthroughId, projectId, uploadIntentKey: parsed.idempotencyKey, title: parsed.fileName } }),
-      database.mediaAsset.create({ data: { id: assetId, walkthroughId, kind: MediaAssetKind.SOURCE_VIDEO, status: MediaAssetStatus.PENDING, objectKey: key, mimeType: parsed.mimeType, byteSize: parsed.byteSize } }),
+      database.mediaAsset.create({ data: { id: assetId, walkthroughId, kind: MediaAssetKind.SOURCE_VIDEO, status: MediaAssetStatus.PENDING, objectKey: stagingKey, stagingObjectKey: stagingKey, mimeType: parsed.mimeType, byteSize: parsed.byteSize } }),
     ]);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
@@ -61,8 +70,8 @@ export async function createUploadIntent(
     throw error;
   }
 
-  const signed = await storage.createUploadIntent({ objectKey: key, mimeType: parsed.mimeType });
-  return { walkthroughId, assetId, objectKey: key, uploadUrl: signed.uploadUrl, expiresAt: signed.expiresAt, requiredHeaders: signed.requiredHeaders };
+  const signed = await storage.createUploadIntent({ objectKey: stagingKey, mimeType: parsed.mimeType });
+  return { walkthroughId, assetId, objectKey: stagingKey, uploadUrl: signed.uploadUrl, expiresAt: signed.expiresAt, requiredHeaders: signed.requiredHeaders };
 }
 
 export async function finalizeUpload(walkthroughId: string, storage: MediaStorage = r2MediaStorage, database: typeof db = db) {
@@ -72,10 +81,24 @@ export async function finalizeUpload(walkthroughId: string, storage: MediaStorag
   const run = record.processingRuns.find((item) => item.pipelineVersion === UPLOAD_PIPELINE_VERSION);
   if (!asset) throw new SiteThreadError("The upload record is incomplete.", "INTERNAL_ERROR");
   if (asset.status === MediaAssetStatus.AVAILABLE && run) return publicRun(run);
+  if (asset.status === MediaAssetStatus.AVAILABLE && !run) {
+    const queued = await database.$transaction(async (tx) => {
+      const persistedRun = await tx.processingRun.upsert({
+        where: { idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}` },
+        create: { id: randomUUID(), walkthroughId, pipelineVersion: UPLOAD_PIPELINE_VERSION, idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}`, status: "UPLOADED" },
+        update: {},
+      });
+      return enqueueProcessingRun(persistedRun.id, tx);
+    });
+    return publicRun(await database.processingRun.findUniqueOrThrow({ where: { id: queued.id } }));
+  }
+  if (!asset.stagingObjectKey) throw new SiteThreadError("The upload staging record is incomplete.", "INTERNAL_ERROR");
   if (!asset.byteSize) throw new SiteThreadError("The upload size is missing.", "INVALID_INPUT");
-  const verified = await storage.verifyUpload({ objectKey: asset.objectKey, expectedByteSize: asset.byteSize, expectedMimeType: asset.mimeType });
+  const destinationKey = durableObjectKey(walkthroughId, asset.id);
+  const verified = await storage.verifyUpload({ objectKey: asset.stagingObjectKey, expectedByteSize: asset.byteSize, expectedMimeType: asset.mimeType });
+  await storage.promoteUpload({ sourceObjectKey: asset.stagingObjectKey, destinationObjectKey: destinationKey, sourceETag: verified.etag, mimeType: asset.mimeType });
   const queued = await database.$transaction(async (tx) => {
-    await tx.mediaAsset.update({ where: { id: asset.id }, data: { status: MediaAssetStatus.AVAILABLE, byteSize: verified.byteSize } });
+    await tx.mediaAsset.update({ where: { id: asset.id }, data: { status: MediaAssetStatus.AVAILABLE, objectKey: destinationKey, stagingObjectKey: null, byteSize: verified.byteSize } });
     const persistedRun = await tx.processingRun.upsert({
       where: { idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}` },
       create: { id: randomUUID(), walkthroughId, pipelineVersion: UPLOAD_PIPELINE_VERSION, idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}`, status: "UPLOADED" },
@@ -84,6 +107,11 @@ export async function finalizeUpload(walkthroughId: string, storage: MediaStorag
     if (run) await tx.processingRun.update({ where: { id: run.id }, data: { status: "UPLOADED", errorCode: null, errorMessage: null, failedStep: null } });
     return enqueueProcessingRun(persistedRun.id, tx);
   });
+  try {
+    await storage.deleteObject({ objectKey: asset.stagingObjectKey });
+  } catch {
+    // The finalized object is already durable; staging cleanup can be retried separately.
+  }
   return publicRun(await database.processingRun.findUniqueOrThrow({ where: { id: queued.id } }));
 }
 

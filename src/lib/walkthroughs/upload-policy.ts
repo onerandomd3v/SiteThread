@@ -4,7 +4,7 @@ export const SUPPORTED_WALKTHROUGH_MIME_TYPE = "video/mp4";
 export const MAX_WALKTHROUGH_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export const UploadIntentRequestSchema = z.object({
-  fileName: z.string().trim().min(1).max(200),
+  fileName: z.string().trim().min(1).max(200).refine((value) => value.toLowerCase().endsWith(".mp4"), "Filename must end in .mp4."),
   mimeType: z.literal(SUPPORTED_WALKTHROUGH_MIME_TYPE),
   byteSize: z.number().int().positive().max(MAX_WALKTHROUGH_UPLOAD_BYTES),
   idempotencyKey: z.string().uuid(),
