@@ -61,6 +61,8 @@ It prepares structured draft observations for a construction professional to rev
 
 ## 3.1 Golden-path first
 
+The [COD-13 product contract](golden-path.md) defines the required journey, review and evidence rules, release scope, and demo acceptance checks. This document describes the engineering approach to that contract.
+
 The MVP exists to make one workflow excellent:
 
 ```text
@@ -847,21 +849,7 @@ No dedicated staging environment is required during the hackathon.
 
 # 23. Upload Constraints for the MVP
 
-Recommended limits:
-
-```text
-Supported: MP4 / MOV
-Maximum duration: ~10 minutes
-Maximum size: ~250 MB
-```
-
-For the actual judge demo, use a controlled walkthrough around:
-
-```text
-60–120 seconds
-```
-
-This improves reliability and keeps the demo understandable.
+The [golden-path input assumptions](golden-path.md#minimum-input-and-operating-assumptions) define the required reference walkthrough and distinguish it from broader upload targets. Validate the deployed media path before advertising supported formats or limits; provider-specific constraints remain in the Livepeer integration document.
 
 ---
 
