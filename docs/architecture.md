@@ -782,6 +782,23 @@ The primary interface should be:
 
 For the hackathon MVP, one seeded project is acceptable if it improves implementation speed.
 
+## 20.1 Repository foundation
+
+COD-15 establishes the first implementation seams without implementing the product workflow:
+
+```text
+prisma/schema.prisma                 structured persistence model
+src/lib/schemas/                     SiteThread-owned Zod contracts
+src/lib/livepeer/types.ts            provider boundary (no Livepeer client yet)
+src/lib/storage/types.ts             private media storage boundary
+src/lib/processing/types.ts          durable job and transition boundary
+src/lib/config/env.ts                server-only environment validation
+src/app/                             minimal Next.js App Router entry point
+tests/e2e/                           Playwright foundation
+```
+
+Prisma owns relational records and migrations; R2 and Trigger.dev remain interfaces until their feature issues implement them. The provider contracts intentionally accept normalized, provider-neutral results. COD-32 must resolve timestamp and visual-input behavior before a Livepeer adapter is added in COD-17. `ReportObservation` snapshots eligible reviewed wording so a later edit requires report regeneration instead of silently changing an existing report.
+
 ---
 
 # 21. Recommended Repository Structure
