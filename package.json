@@ -16,6 +16,8 @@
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1134.0",
+    "@aws-sdk/s3-request-presigner": "^3.1134.0",
     "@prisma/client": "^6.16.2",
     "next": "^16.0.0",
     "react": "^19.2.0",

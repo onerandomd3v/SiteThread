@@ -66,6 +66,7 @@ model Project {
 model Walkthrough {
   id                 String              @id @default(cuid())
   projectId          String
+  uploadIntentKey    String?             @unique
   title              String?
   capturedAt         DateTime?
   durationSeconds    Float?
@@ -87,6 +88,7 @@ model MediaAsset {
   kind               MediaAssetKind
   status             MediaAssetStatus      @default(PENDING)
   objectKey          String
+  stagingObjectKey   String?
   mimeType           String
   byteSize           Int?
   durationSeconds    Float?
