@@ -52,6 +52,8 @@ The third phrase was a minor recognition error for “The site supervisor must r
 
 For a 60–120 second walkthrough, six-second windows imply 10–20 ASR calls. At the returned estimate, transcription is approximately $0.007–$0.014 before retries. Calls may run with bounded concurrency, but source ordering must be restored before persistence.
 
+Windows are six seconds except for the final window. If the media duration is not divisible by six, shorten the final window to the exact remaining duration and persist its true half-open range without exceeding the media duration. Send a nonempty final partial window to ASR; an empty or silent result may be omitted from later reasoning under the existing empty-window rule. Do not pad the final window or invent timing. For example, a 62-second walkthrough ends with `[60, 62)`, never `[60, 66)`.
+
 ### Visual route decision
 
 The controlled PNG sent to `nemotron-omni` again produced `image_accessible: false`; current discovery did not expose `nemotron-vision`. Frame/image analysis is rejected for COD-17's initial live provider.
@@ -60,7 +62,7 @@ The video probe was a six-second, 640 × 360 H.264/AAC clip of 35,676 bytes. A b
 
 The same audio-video input sent with `async: false` succeeded in 177.982 seconds. Its text correctly described both layouts and returned `<0.0 - 3.0>` and `<3.0 - 6.0>` event ranges. The estimated cost was $0.0158. A same-key replay returned the identical result in 0.723 seconds with `idempotency_replay: true`.
 
-COD-17 must therefore use **synchronous `marlin-video` inside Trigger.dev**, with a 260-second provider timeout and a 300-second HTTP deadline. The authoritative success value is the synchronous `structuredContent` where `ok === true`, `output_kind === "text"`, and `result.text` is nonempty. The model's event ranges are useful candidates only after parsing, finite-number checks, ordering checks, and clipping to the known six-second input. The durable evidence range remains the SiteThread-owned source clip range even if event parsing fails.
+COD-17 must therefore use **synchronous `marlin-video` inside Trigger.dev**, with a 260-second provider timeout and a 300-second HTTP deadline. The authoritative success value is the synchronous `structuredContent` where `ok === true`, `output_kind === "text"`, and `result.text` is nonempty. A provider event range is a candidate only when its start and end are finite, `start <= end`, and the entire range is contained within the actual input clip duration. Reject or ignore an out-of-bounds range; never clamp an unsupported provider event into trusted evidence. The full SiteThread-owned source clip range remains the durable evidence fallback whenever event parsing fails or a candidate is rejected.
 
 Do not analyze every source window. For the MVP, partition the walkthrough into 20-second buckets and select at most one six-second clip per bucket, preferring a nonempty transcript window nearest the bucket center and otherwise taking a periodic sample. Clamp each clip to the media duration, deduplicate overlapping selections, and cap one walkthrough at six visual calls. This yields at most three calls for a 60-second walkthrough and six for a 120-second walkthrough. At the observed estimate, visual inference is at most $0.0474–$0.0948; the combined ASR plus visual estimate is approximately $0.0544–$0.1088 before retries, storage, or price changes.
 
@@ -122,7 +124,7 @@ After `initialize` and `notifications/initialized`, discover the exact names and
 
 For both calls, require HTTP success, no JSON-RPC error, no MCP `isError`, `structuredContent.ok === true`, the requested capability name, `output_kind === "text"`, and nonempty `structuredContent.result.text`. Treat every other shape as a provider failure. Parse responses as `unknown`; ignore extra fields after recording safe diagnostic metadata. Never persist `source_url`, `inputs.audio_url`, `inputs.video_url`, or the bearer.
 
-The transcription orchestrator attaches the deterministic source range to the returned text; the provider response is not the source of timing truth. The visual orchestrator attaches `VisualAnalysisInput.sourceStartSeconds` and `sourceEndSeconds` to the whole result. Provider event subranges may be normalized only when finite, ordered, and contained in the six-second clip, then offset by the clip's source start. Reject or ignore out-of-bounds event ranges instead of clamping unsupported claims into trusted evidence.
+The transcription orchestrator attaches the deterministic source range to the returned text; the provider response is not the source of timing truth. The visual orchestrator attaches `VisualAnalysisInput.sourceStartSeconds` and `sourceEndSeconds` to the whole result. Provider event subranges may be normalized only when their finite start and end satisfy `start <= end` and the full range is contained within the actual input clip duration, then offset by the clip's source start. Reject or ignore out-of-bounds event ranges instead of clamping unsupported claims into trusted evidence.
 
 If a nonselected async capability is ever used, `run_capability` returns `status: "submitted"`, a `job_id`, and `poll_with: "get_create_media"`. Poll with that `job_id`; `submitted` or `running` is nonterminal, `done` requires a valid `run_output`, and `failed` is terminal even on HTTP 200. Persist the provider job ID before polling. COD-17's selected ASR and Marlin calls do not use this path.
 
@@ -367,7 +369,7 @@ Reference inspected at commit `406c845aedac53ab1df4e9bdb3fe644006e31bdb`:
 
 | Concern | Raw MCP | Direct Livepeer HTTP |
 |---|---|---|
-| Background execution | Real sync transcription and async video analysis verified; callable by a worker | Documented HTTP contract; direct submission not tested |
+| Background execution | COD-14 historically verified async video submission/polling; COD-32 selected synchronous `nemotron-asr` and synchronous `marlin-video` because current Marlin async retrieval failed | Documented HTTP contract; direct submission not tested |
 | Trigger.dev fit | Ordinary Node HTTP/MCP client inside durable jobs; compatibility inferred, not deployed | Ordinary Node HTTP client; compatibility inferred, not deployed |
 | Async jobs | Whisper text retrieval passed in COD-32; Marlin text retrieval failed three current probes and is not selected | Submit/poll documented; direct submission remains untested |
 | Retries | Structured error fields observed; input rejects must not be retried unchanged | Status/error envelope documented; production failure classification untested |
