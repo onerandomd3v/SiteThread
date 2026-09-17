@@ -417,12 +417,14 @@ Implementation:
 ```text
 LivepeerMediaProvider
         ↓
-Livepeer Agent API / SDK
+Livepeer Agent raw MCP (Streamable HTTP)
 ```
 
 The rest of SiteThread should not know provider-specific request details.
 
 This protects the architecture from changes to Livepeer's API surface during the hackathon.
+
+COD-14 selected raw MCP as the runtime direction after real capability tests. Timestamped transcription and useful image understanding remain unresolved; this diagram does not imply the required media contracts are validated. See [the integration findings and gates before COD-17](livepeer-integration.md) before implementing the provider.
 
 ---
 
