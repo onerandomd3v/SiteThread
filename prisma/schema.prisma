@@ -126,6 +126,7 @@ model ProcessingRun {
   transcriptSegments TranscriptSegment[]
   visualCandidates VisualCandidate[]
   providerInvocations ProviderInvocation[]
+  observations Observation[]
 
   @@unique([walkthroughId, pipelineVersion])
   @@index([walkthroughId, status])
@@ -205,9 +206,12 @@ model VisualCandidate {
 model Observation {
   id                String                 @id @default(cuid())
   walkthroughId     String
+  processingRunId   String?
+  sequence          Int?
   type              ObservationType
   sourceBasis       ObservationSourceBasis
   originalDraftText String
+  suggestedAction   String?
   editedText        String?
   location          String?
   trade             String?
@@ -218,10 +222,13 @@ model Observation {
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
   walkthrough       Walkthrough            @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
+  processingRun     ProcessingRun?         @relation(fields: [processingRunId], references: [id], onDelete: SetNull)
   evidence          ObservationEvidence[]
   reportItems       ReportObservation[]
 
+  @@unique([processingRunId, sequence])
   @@index([walkthroughId, reviewState])
+  @@index([processingRunId, sequence])
 }
 
 model ObservationEvidence {
