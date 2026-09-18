@@ -7,6 +7,7 @@ import { sanitizeProviderResponse, sanitizeResultText } from "./sanitize";
 import type { MediaCapabilities, MediaIntelligenceProvider, ProviderResult, SafeJson, TranscriptionInput, VisualAnalysisInput } from "./types";
 
 const PROTOCOL = "2024-11-05";
+const LIVEPEER_MCP_ORIGIN = "https://agent.livepeer.org";
 const CAPABILITIES = { TRANSCRIPTION: "nemotron-asr", VISION: "marlin-video" } as const;
 const MODELS = { "nemotron-asr": "nvidia/nemotron-asr-multilingual/asr", "marlin-video": "fal-ai/marlin" } as const;
 const VISUAL_PROMPT = "Describe visible conditions and list time-ranged events. Do not make safety, code-compliance, completion, or approval claims.";
@@ -101,7 +102,15 @@ export class LivepeerMediaIntelligenceProvider implements MediaIntelligenceProvi
     } catch {
       throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
     }
-    if (url.protocol !== "https:" || url.pathname !== "/api/mcp/raw") throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
+    if (
+      url.origin !== LIVEPEER_MCP_ORIGIN
+      || url.port
+      || url.username
+      || url.password
+      || url.pathname !== "/api/mcp/raw"
+      || url.search
+      || url.hash
+    ) throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
     this.transport = new RawMcpTransport(endpoint, bearer, fetcher);
   }
 

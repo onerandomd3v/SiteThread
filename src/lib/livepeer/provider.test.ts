@@ -32,14 +32,21 @@ function providerWithRun(run: (request: Record<string, unknown>, call: number) =
 }
 
 describe("Livepeer raw MCP adapter", () => {
-  it("accepts the selected HTTPS endpoint and rejects HTTP before making a request", () => {
+  it("accepts only the frozen Livepeer raw MCP endpoint before making a request", () => {
     const fetcher = vi.fn(async () => rpc({})) as unknown as typeof fetch;
     expect(() => new LivepeerMediaIntelligenceProvider(endpoint, "test-placeholder", fetcher)).not.toThrow();
-    expect(() => new LivepeerMediaIntelligenceProvider("http://agent.livepeer.org/api/mcp/raw", "test-placeholder", fetcher)).toThrowError(SiteThreadError);
-    try {
-      new LivepeerMediaIntelligenceProvider("http://agent.livepeer.org/api/mcp/raw", "test-placeholder", fetcher);
-    } catch (error) {
-      expect(error).toMatchObject({ code: "PROVIDER_CONTRACT_UNRESOLVED" });
+    for (const rejected of [
+      "http://agent.livepeer.org/api/mcp/raw",
+      "https://evil.example/api/mcp/raw",
+      "https://agent.livepeer.org:8443/api/mcp/raw",
+      "https://user:password@agent.livepeer.org/api/mcp/raw",
+    ]) {
+      expect(() => new LivepeerMediaIntelligenceProvider(rejected, "test-placeholder", fetcher)).toThrowError(SiteThreadError);
+      try {
+        new LivepeerMediaIntelligenceProvider(rejected, "test-placeholder", fetcher);
+      } catch (error) {
+        expect(error).toMatchObject({ code: "PROVIDER_CONTRACT_UNRESOLVED" });
+      }
     }
     expect(fetcher).not.toHaveBeenCalled();
   });
