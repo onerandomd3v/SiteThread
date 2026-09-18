@@ -4,6 +4,11 @@ export type SiteThreadErrorCode =
   | "MEDIA_UNAVAILABLE"
   | "PROCESSING_FAILED"
   | "PROVIDER_CONTRACT_UNRESOLVED"
+  | "PROVIDER_AUTH"
+  | "PROVIDER_INVALID_INPUT"
+  | "PROVIDER_TIMEOUT"
+  | "PROVIDER_UNAVAILABLE"
+  | "PROVIDER_RESULT_INVALID"
   | "INTERNAL_ERROR";
 
 export class SiteThreadError extends Error {

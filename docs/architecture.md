@@ -796,7 +796,7 @@ src/app/                             minimal Next.js App Router entry point
 tests/e2e/                           Playwright foundation
 ```
 
-Prisma owns relational records and migrations; R2 and Trigger.dev remain interfaces until their feature issues implement them. The provider contracts intentionally accept normalized, provider-neutral results. COD-32 must resolve timestamp and visual-input behavior before a Livepeer adapter is added in COD-17. `ReportObservation` snapshots eligible reviewed wording so a later edit requires report regeneration instead of silently changing an existing report.
+Prisma owns relational records and migrations. COD-16 stores private source media in R2 and queues a durable `ProcessingRun`; COD-17 dispatches that run to Trigger.dev for FFmpeg, Livepeer transcription, and visual candidate persistence. Provider contracts return normalized, provider-neutral results. Each visual candidate keeps the full source clip range; a validated provider event range is stored separately as a hint. The worker stops at `EXTRACTING_OBSERVATIONS` for COD-18. `ReportObservation` snapshots eligible reviewed wording so a later edit requires report regeneration instead of silently changing an existing report.
 
 ---
 

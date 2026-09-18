@@ -1,8 +1,12 @@
 import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createReadStream, createWriteStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { parseServerEnv } from "@/lib/config/env";
 import { SiteThreadError } from "@/lib/errors";
-import type { MediaStorage, MediaObject, UploadIntent } from "./types";
+import type { ProcessingMediaStorage, MediaObject, UploadIntent } from "./types";
 
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 const SIGNATURE_RANGE = "bytes=0-63";
@@ -32,7 +36,7 @@ function createR2Client(): { client: S3Client; bucket: string } {
   };
 }
 
-export class R2MediaStorage implements MediaStorage {
+export class R2MediaStorage implements ProcessingMediaStorage {
   async createUploadIntent(input: { objectKey: string; mimeType: string }): Promise<UploadIntent> {
     const { client, bucket } = createR2Client();
     const expiresAt = new Date(Date.now() + UPLOAD_URL_TTL_SECONDS * 1000);
@@ -103,6 +107,30 @@ export class R2MediaStorage implements MediaStorage {
     const { client, bucket } = createR2Client();
     const result = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: input.assetId }));
     return { assetId: input.assetId, objectKey: input.assetId, mimeType: result.ContentType ?? "application/octet-stream", byteSize: result.ContentLength };
+  }
+
+  async downloadToFile(input: { objectKey: string; filePath: string }): Promise<void> {
+    const { client, bucket } = createR2Client();
+    try {
+      const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: input.objectKey }));
+      if (!(result.Body instanceof Readable)) throw new SiteThreadError("The source media is unavailable.", "MEDIA_UNAVAILABLE");
+      await pipeline(result.Body, createWriteStream(input.filePath));
+    } catch (error) {
+      if (error instanceof SiteThreadError) throw error;
+      const status = error && typeof error === "object" && "$metadata" in error ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode : undefined;
+      throw new SiteThreadError("The private source media could not be read.", "MEDIA_UNAVAILABLE", status !== 404, { cause: error });
+    }
+  }
+
+  async putFile(input: { objectKey: string; filePath: string; mimeType: string }): Promise<{ byteSize: number }> {
+    const { client, bucket } = createR2Client();
+    try {
+      const file = await stat(input.filePath);
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: input.objectKey, Body: createReadStream(input.filePath), ContentLength: file.size, ContentType: input.mimeType }));
+      return { byteSize: file.size };
+    } catch (error) {
+      throw new SiteThreadError("A private media derivative could not be stored.", "MEDIA_UNAVAILABLE", true, { cause: error });
+    }
   }
 }
 

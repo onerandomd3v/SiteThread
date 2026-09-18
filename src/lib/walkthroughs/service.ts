@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { MediaAssetKind, MediaAssetStatus, Prisma, ProcessingStatus } from "@prisma/client";
 import { db } from "@/lib/db/client";
 import { SiteThreadError } from "@/lib/errors";
-import { enqueueProcessingRun, retryProcessingRun, UPLOAD_PIPELINE_VERSION } from "@/lib/processing/lifecycle";
+import { enqueueProcessingRun, retryProcessingRun, PIPELINE_VERSION } from "@/lib/processing/lifecycle";
 import type { MediaStorage } from "@/lib/storage/types";
 import { r2MediaStorage } from "@/lib/storage/r2";
 import { MAX_WALKTHROUGH_UPLOAD_BYTES, UploadIntentRequestSchema, type UploadIntentRequest } from "./upload-policy";
@@ -15,7 +15,7 @@ function stagingObjectKey(walkthroughId: string, assetId: string): string {
   return `walkthroughs/${walkthroughId}/staging/${assetId}.mp4`;
 }
 
-function publicRun(run: { id: string; walkthroughId: string; status: ProcessingStatus; retryCount: number; failedStep: string | null; errorCode: string | null; errorMessage: string | null; updatedAt: Date }) {
+function publicRun(run: { id: string; walkthroughId: string; status: ProcessingStatus; retryCount: number; failedStep: string | null; errorCode: string | null; errorMessage: string | null; retryable?: boolean | null; updatedAt: Date }) {
   return {
     id: run.id,
     walkthroughId: run.walkthroughId,
@@ -24,6 +24,7 @@ function publicRun(run: { id: string; walkthroughId: string; status: ProcessingS
     failedStep: run.failedStep,
     errorCode: run.errorCode,
     errorMessage: run.errorMessage,
+    retryable: run.retryable ?? null,
     updatedAt: run.updatedAt,
   };
 }
@@ -42,7 +43,7 @@ export async function createUploadIntent(
   if (existing) {
     if (existing.projectId !== projectId) throw new SiteThreadError("This upload intent belongs to another project.", "INVALID_INPUT");
     const asset = existing.mediaAssets.find((item) => item.kind === MediaAssetKind.SOURCE_VIDEO);
-    const run = existing.processingRuns.find((item) => item.pipelineVersion === UPLOAD_PIPELINE_VERSION);
+    const run = existing.processingRuns.find((item) => item.pipelineVersion === PIPELINE_VERSION);
     if (!asset || asset.byteSize !== parsed.byteSize || asset.mimeType !== parsed.mimeType) {
       throw new SiteThreadError("The upload intent does not match the original file.", "INVALID_INPUT");
     }
@@ -77,14 +78,14 @@ export async function finalizeUpload(walkthroughId: string, storage: MediaStorag
   const record = await database.walkthrough.findUnique({ where: { id: walkthroughId }, include: { mediaAssets: true, processingRuns: true } });
   if (!record) throw new SiteThreadError("Walkthrough was not found.", "NOT_FOUND");
   const asset = record.mediaAssets.find((item) => item.kind === MediaAssetKind.SOURCE_VIDEO);
-  const run = record.processingRuns.find((item) => item.pipelineVersion === UPLOAD_PIPELINE_VERSION);
+  const run = record.processingRuns.find((item) => item.pipelineVersion === PIPELINE_VERSION);
   if (!asset) throw new SiteThreadError("The upload record is incomplete.", "INTERNAL_ERROR");
   if (asset.status === MediaAssetStatus.AVAILABLE && run) return publicRun(run);
   if (asset.status === MediaAssetStatus.AVAILABLE && !run) {
     const queued = await database.$transaction(async (tx) => {
       const persistedRun = await tx.processingRun.upsert({
-        where: { idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}` },
-        create: { id: randomUUID(), walkthroughId, pipelineVersion: UPLOAD_PIPELINE_VERSION, idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}`, status: "UPLOADED" },
+        where: { idempotencyKey: `${walkthroughId}:${PIPELINE_VERSION}` },
+        create: { id: randomUUID(), walkthroughId, pipelineVersion: PIPELINE_VERSION, idempotencyKey: `${walkthroughId}:${PIPELINE_VERSION}`, status: "UPLOADED" },
         update: {},
       });
       return enqueueProcessingRun(persistedRun.id, tx);
@@ -100,8 +101,8 @@ export async function finalizeUpload(walkthroughId: string, storage: MediaStorag
   const queued = await database.$transaction(async (tx) => {
     await tx.mediaAsset.update({ where: { id: asset.id }, data: { status: MediaAssetStatus.AVAILABLE, objectKey: destinationKey, stagingObjectKey: null, byteSize: verified.byteSize } });
     const persistedRun = await tx.processingRun.upsert({
-      where: { idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}` },
-      create: { id: randomUUID(), walkthroughId, pipelineVersion: UPLOAD_PIPELINE_VERSION, idempotencyKey: `${walkthroughId}:${UPLOAD_PIPELINE_VERSION}`, status: "UPLOADED" },
+      where: { idempotencyKey: `${walkthroughId}:${PIPELINE_VERSION}` },
+      create: { id: randomUUID(), walkthroughId, pipelineVersion: PIPELINE_VERSION, idempotencyKey: `${walkthroughId}:${PIPELINE_VERSION}`, status: "UPLOADED" },
       update: {},
     });
     if (run) await tx.processingRun.update({ where: { id: run.id }, data: { status: "UPLOADED", errorCode: null, errorMessage: null, failedStep: null } });
@@ -119,13 +120,13 @@ export async function getWalkthroughStatus(walkthroughId: string, database: type
   const record = await database.walkthrough.findUnique({ where: { id: walkthroughId }, include: { mediaAssets: true, processingRuns: true, project: { select: { id: true, name: true } } } });
   if (!record) throw new SiteThreadError("Walkthrough was not found.", "NOT_FOUND");
   const asset = record.mediaAssets.find((item) => item.kind === MediaAssetKind.SOURCE_VIDEO);
-  const run = record.processingRuns.find((item) => item.pipelineVersion === UPLOAD_PIPELINE_VERSION);
+  const run = record.processingRuns.find((item) => item.pipelineVersion === PIPELINE_VERSION);
   if (!asset) throw new SiteThreadError("The upload record is incomplete.", "INTERNAL_ERROR");
   return { walkthrough: { id: record.id, title: record.title, project: record.project }, asset: { id: asset.id, status: asset.status, mimeType: asset.mimeType, byteSize: asset.byteSize }, run: run ? publicRun(run) : null };
 }
 
 export async function retryWalkthrough(walkthroughId: string, database: typeof db = db) {
-  const run = await database.processingRun.findFirst({ where: { walkthroughId, pipelineVersion: UPLOAD_PIPELINE_VERSION }, include: { walkthrough: { include: { mediaAssets: true } } } });
+  const run = await database.processingRun.findFirst({ where: { walkthroughId, pipelineVersion: PIPELINE_VERSION }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("Walkthrough was not found.", "NOT_FOUND");
   const asset = run.walkthrough.mediaAssets.find((item) => item.kind === MediaAssetKind.SOURCE_VIDEO);
   if (!asset || asset.status !== MediaAssetStatus.AVAILABLE) throw new SiteThreadError("Upload the source media before retrying processing.", "MEDIA_UNAVAILABLE", true);

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { SiteThreadError } from "@/lib/errors";
 import type { MediaStorage } from "@/lib/storage/types";
-import { createUploadIntent, finalizeUpload } from "./service";
+import { createUploadIntent, finalizeUpload, retryWalkthrough } from "./service";
 import type { db } from "@/lib/db/client";
+import { PIPELINE_VERSION } from "@/lib/processing/lifecycle";
 
 const input = { fileName: "walk.mp4", mimeType: "video/mp4" as const, byteSize: 1024, idempotencyKey: "00000000-0000-4000-8000-000000000001" };
 
@@ -112,5 +113,38 @@ describe("walkthrough upload service", () => {
     await expect(finalizeUpload("walk-1", storage, database)).rejects.toMatchObject({ code: "MEDIA_UNAVAILABLE" });
     expect(promoted).toBe(false);
     expect(asset.status).toBe("PENDING");
+  });
+
+  it("reuses a COD-16 queued run with the unchanged pipeline version", async () => {
+    expect(PIPELINE_VERSION).toBe("mvp-upload-v1");
+    const run = { id: "cod16-run", walkthroughId: "walk-1", pipelineVersion: PIPELINE_VERSION, status: "QUEUED", retryCount: 0, failedStep: null, errorCode: null, errorMessage: null, updatedAt: new Date() };
+    const database = {
+      walkthrough: { findUnique: async () => ({ id: "walk-1", mediaAssets: [{ kind: "SOURCE_VIDEO", status: "AVAILABLE" }], processingRuns: [run] }) },
+    } as unknown as typeof db;
+    const result = await finalizeUpload("walk-1", storageFake(), database);
+    expect(result).toMatchObject({ id: "cod16-run", status: "QUEUED" });
+  });
+
+  it("allows an explicit whole-run retry after a nonretryable failure is corrected", async () => {
+    const run = { id: "run", walkthroughId: "walk", status: "PROCESSING_FAILED", retryable: false as boolean | null, retryCount: 0, failedStep: "ANALYZING_MEDIA", errorCode: "PROVIDER_AUTH", errorMessage: "Provider authorization is unavailable.", updatedAt: new Date() };
+    const database = {
+      processingRun: {
+        findFirst: async () => ({ ...run, walkthrough: { mediaAssets: [{ kind: "SOURCE_VIDEO", status: "AVAILABLE" }] } }),
+        findUnique: async () => ({ ...run }),
+        findUniqueOrThrow: async () => ({ ...run }),
+        updateMany: async ({ where }: { where: { status: string } }) => {
+          if (run.status !== where.status) return { count: 0 };
+          run.status = "QUEUED";
+          run.retryCount += 1;
+          run.retryable = null;
+          return { count: 1 };
+        },
+      },
+    } as unknown as typeof db;
+    const first = await retryWalkthrough("walk", database);
+    const second = await retryWalkthrough("walk", database);
+    expect(first).toMatchObject({ id: "run", status: "QUEUED", retryCount: 1 });
+    expect(second.id).toBe(first.id);
+    expect(run.retryCount).toBe(1);
   });
 });

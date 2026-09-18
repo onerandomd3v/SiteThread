@@ -184,8 +184,8 @@ Expected abstraction:
 ```ts
 interface MediaIntelligenceProvider {
   discoverCapabilities(): Promise<MediaCapabilities>;
-  transcribe(input: TranscriptionInput): Promise<Transcript>;
-  analyzeImage(input: VisionInput): Promise<VisionResult>;
+  transcribe(input: TranscriptionInput): Promise<ProviderResult<ProviderTranscriptResult>>;
+  analyzeVisual(input: VisualAnalysisInput): Promise<ProviderResult<ProviderVisionResult>>;
 }
 ```
 
