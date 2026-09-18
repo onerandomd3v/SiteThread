@@ -20,3 +20,8 @@ export interface MediaStorage {
   createReadUrl(input: { assetId: string; expiresInSeconds: number }): Promise<string>;
   getObject(input: { assetId: string }): Promise<MediaObject>;
 }
+
+export interface ProcessingMediaStorage extends MediaStorage {
+  downloadToFile(input: { objectKey: string; filePath: string }): Promise<void>;
+  putFile(input: { objectKey: string; filePath: string; mimeType: string }): Promise<{ byteSize: number }>;
+}

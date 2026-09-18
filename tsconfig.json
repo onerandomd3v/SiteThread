@@ -36,6 +36,7 @@
     "src/**/*.tsx",
     "vitest.config.ts",
     "playwright.config.ts",
+    "trigger.config.ts",
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [

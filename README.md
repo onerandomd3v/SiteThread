@@ -38,7 +38,7 @@ Findings remain traceable to their source where available, including transcript 
 
 ## Livepeer
 
-Livepeer is SiteThread's primary media-intelligence layer. SiteThread requires timestamped transcription and visual understanding to prepare evidence-backed observations. Raw MCP is the selected runtime direction; transcript timing and the final image/frame route still require validation before pipeline implementation.
+Livepeer is SiteThread's primary media-intelligence layer. The selected raw MCP path uses six-second SiteThread-timed `nemotron-asr` windows and bounded `marlin-video` clips. The pipeline persists transcript and visual candidates for later observation reasoning. Production bearer ownership, private signed-media fetches, and representative construction-media quality still require live validation.
 
 See the [Livepeer integration and technical spike](docs/livepeer-integration.md) for the detailed integration decisions, provider boundaries, capability validation, and processing strategy.
 

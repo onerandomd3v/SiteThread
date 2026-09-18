@@ -10,7 +10,7 @@
 
 ## Final integration decision
 
-Use **Livepeer raw MCP over Streamable HTTP**, at the path-pinned `https://agent.livepeer.org/api/mcp/raw`, behind the SiteThread-owned `MediaIntelligenceProvider` in future Trigger.dev workers. Keep capability discovery, transport, authentication, result validation, and error classification inside `src/lib/livepeer/`.
+Use **Livepeer raw MCP over Streamable HTTP**, at the path-pinned `https://agent.livepeer.org/api/mcp/raw`, behind the SiteThread-owned `MediaIntelligenceProvider` in the Trigger.dev worker. Keep capability discovery, transport, authentication, result validation, and error classification inside `src/lib/livepeer/`.
 
 COD-32 freezes two narrow media contracts for COD-17. Transcription uses exact six-second FFmpeg source windows and synchronous `nemotron-asr`; SiteThread supplies the trustworthy window start/end because raw MCP did not preserve native ASR timestamps. Visual analysis uses bounded six-second H.264/AAC clips and synchronous `marlin-video`; the complete clip range is the durable evidence range, while model-proposed subranges remain untrusted hints. Direct image analysis is not selected. Marlin's async text-job wrapper failed in all three current probes, so COD-17 must not use that polling route for visual results.
 

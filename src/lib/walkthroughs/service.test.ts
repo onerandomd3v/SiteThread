@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SiteThreadError } from "@/lib/errors";
 import type { MediaStorage } from "@/lib/storage/types";
-import { createUploadIntent, finalizeUpload } from "./service";
+import { createUploadIntent, finalizeUpload, retryWalkthrough } from "./service";
 import type { db } from "@/lib/db/client";
 
 const input = { fileName: "walk.mp4", mimeType: "video/mp4" as const, byteSize: 1024, idempotencyKey: "00000000-0000-4000-8000-000000000001" };
@@ -112,5 +112,14 @@ describe("walkthrough upload service", () => {
     await expect(finalizeUpload("walk-1", storage, database)).rejects.toMatchObject({ code: "MEDIA_UNAVAILABLE" });
     expect(promoted).toBe(false);
     expect(asset.status).toBe("PENDING");
+  });
+
+  it("does not retry a classified nonretryable processing failure unchanged", async () => {
+    const database = {
+      processingRun: {
+        findFirst: async () => ({ id: "run", status: "PROCESSING_FAILED", retryable: false, walkthrough: { mediaAssets: [{ kind: "SOURCE_VIDEO", status: "AVAILABLE" }] } }),
+      },
+    } as unknown as typeof db;
+    await expect(retryWalkthrough("walk", database)).rejects.toMatchObject({ code: "PROCESSING_FAILED", retryable: false });
   });
 });

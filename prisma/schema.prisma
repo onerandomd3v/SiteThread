@@ -76,6 +76,7 @@ model Walkthrough {
   mediaAssets        MediaAsset[]
   processingRuns     ProcessingRun[]
   transcriptSegments TranscriptSegment[]
+  visualCandidates   VisualCandidate[]
   observations       Observation[]
   reports            Report[]
 
@@ -99,6 +100,7 @@ model MediaAsset {
   walkthrough        Walkthrough           @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
   transcriptSegments TranscriptSegment[]
   evidence           ObservationEvidence[]
+  visualCandidates   VisualCandidate[]
 
   @@unique([walkthroughId, objectKey])
   @@index([walkthroughId, kind])
@@ -113,6 +115,7 @@ model ProcessingRun {
   failedStep      String?
   errorCode       String?
   errorMessage    String?
+  retryable       Boolean?
   retryCount      Int              @default(0)
   providerJobIds  Json?
   startedAt       DateTime?
@@ -120,6 +123,9 @@ model ProcessingRun {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   walkthrough     Walkthrough      @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
+  transcriptSegments TranscriptSegment[]
+  visualCandidates VisualCandidate[]
+  providerInvocations ProviderInvocation[]
 
   @@unique([walkthroughId, pipelineVersion])
   @@index([walkthroughId, status])
@@ -128,6 +134,7 @@ model ProcessingRun {
 model TranscriptSegment {
   id            String                @id @default(cuid())
   walkthroughId String
+  processingRunId String?
   sourceAssetId String?
   sequence      Int
   startSeconds  Float
@@ -137,11 +144,61 @@ model TranscriptSegment {
   language      String?
   createdAt     DateTime              @default(now())
   walkthrough   Walkthrough           @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
+  processingRun ProcessingRun?        @relation(fields: [processingRunId], references: [id], onDelete: SetNull)
   sourceAsset   MediaAsset?           @relation(fields: [sourceAssetId], references: [id], onDelete: SetNull)
   evidence      ObservationEvidence[]
 
   @@unique([walkthroughId, sequence])
   @@index([walkthroughId, startSeconds])
+  @@unique([processingRunId, sourceAssetId, startSeconds, endSeconds])
+}
+
+model ProviderInvocation {
+  id             String        @id @default(cuid())
+  processingRunId String
+  idempotencyKey String        @unique
+  provider       String
+  capability     String
+  stage          String
+  sourceStartSeconds Float
+  sourceEndSeconds Float
+  status         String
+  rawResponse    Json?
+  errorCode      String?
+  retryable      Boolean?
+  latencyMs      Int?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  processingRun  ProcessingRun @relation(fields: [processingRunId], references: [id], onDelete: Cascade)
+  visualCandidates VisualCandidate[]
+
+  @@index([processingRunId, stage])
+}
+
+model VisualCandidate {
+  id                  String             @id @default(cuid())
+  processingRunId     String
+  walkthroughId       String
+  mediaAssetId        String
+  providerInvocationId String
+  clipStartSeconds    Float
+  clipEndSeconds      Float
+  sourceStartSeconds  Float
+  sourceEndSeconds    Float
+  eventStartSeconds   Float?
+  eventEndSeconds     Float?
+  text                String
+  provider            String
+  capability          String
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  processingRun       ProcessingRun      @relation(fields: [processingRunId], references: [id], onDelete: Cascade)
+  walkthrough         Walkthrough        @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
+  mediaAsset          MediaAsset         @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+  providerInvocation  ProviderInvocation @relation(fields: [providerInvocationId], references: [id], onDelete: Cascade)
+
+  @@unique([processingRunId, mediaAssetId])
+  @@index([walkthroughId, sourceStartSeconds])
 }
 
 model Observation {
