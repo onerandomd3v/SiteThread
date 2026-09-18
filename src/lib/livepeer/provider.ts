@@ -47,7 +47,7 @@ function allStringValues(input: unknown, depth = 0): string[] {
   return [];
 }
 
-class RawMcpTransport {
+export class RawMcpTransport {
   private nextId = 1;
   private sessionId: string | undefined;
   constructor(private readonly endpoint: string, private readonly bearer: string | undefined, private readonly fetcher: typeof fetch) {}
@@ -92,25 +92,29 @@ class RawMcpTransport {
   }
 }
 
+export function validateLivepeerEndpoint(endpoint: string): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
+  }
+  if (
+    url.origin !== LIVEPEER_MCP_ORIGIN
+    || url.port
+    || url.username
+    || url.password
+    || url.pathname !== "/api/mcp/raw"
+    || url.search
+    || url.hash
+  ) throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
+}
+
 export class LivepeerMediaIntelligenceProvider implements MediaIntelligenceProvider {
   private transport: RawMcpTransport;
   private initialized = false;
   constructor(endpoint: string, bearer?: string, fetcher: typeof fetch = fetch) {
-    let url: URL;
-    try {
-      url = new URL(endpoint);
-    } catch {
-      throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
-    }
-    if (
-      url.origin !== LIVEPEER_MCP_ORIGIN
-      || url.port
-      || url.username
-      || url.password
-      || url.pathname !== "/api/mcp/raw"
-      || url.search
-      || url.hash
-    ) throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
+    validateLivepeerEndpoint(endpoint);
     this.transport = new RawMcpTransport(endpoint, bearer, fetcher);
   }
 

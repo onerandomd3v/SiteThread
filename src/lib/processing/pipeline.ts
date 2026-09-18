@@ -11,6 +11,8 @@ import { sanitizeProviderResponse } from "@/lib/livepeer/sanitize";
 import { extractAudioWindow, extractVisualClip, probeDuration } from "@/lib/media/ffmpeg";
 import { r2MediaStorage } from "@/lib/storage/r2";
 import type { ProcessingMediaStorage } from "@/lib/storage/types";
+import { extractObservations } from "@/lib/reasoning/extract";
+import type { ObservationReasoner } from "@/lib/reasoning/types";
 import { providerEventSourceRange, audioWindows, visualClips, type SourceRange } from "./selection";
 import { transitionProcessingRun } from "./lifecycle";
 
@@ -52,14 +54,23 @@ async function saveProviderFailure(database: typeof db, runId: string, stage: st
 
 export async function processWalkthrough(
   runId: string,
-  dependencies: { database?: typeof db; storage?: ProcessingMediaStorage; provider?: MediaIntelligenceProvider; media?: ProcessingMediaTools } = {},
+  dependencies: { database?: typeof db; storage?: ProcessingMediaStorage; provider?: MediaIntelligenceProvider; media?: ProcessingMediaTools; reasoner?: ObservationReasoner } = {},
 ): Promise<void> {
   const database = dependencies.database ?? db;
   const storage = dependencies.storage ?? r2MediaStorage;
   const media = dependencies.media ?? ffmpegTools;
   const run = await database.processingRun.findUnique({ where: { id: runId }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("The processing run was not found.", "NOT_FOUND");
-  if (run.status === "EXTRACTING_OBSERVATIONS") return;
+  if (run.status === "EXTRACTING_OBSERVATIONS") {
+    try {
+      await extractObservations(runId, { database, reasoner: dependencies.reasoner });
+      return;
+    } catch (error) {
+      const safe = serializeError(error);
+      await transitionProcessingRun(runId, "PROCESSING_FAILED", { failedStep: "EXTRACTING_OBSERVATIONS", errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
+      throw new SiteThreadError(safe.message, safe.code, safe.retryable);
+    }
+  }
   if (!["QUEUED", "TRANSCRIBING", "ANALYZING_MEDIA"].includes(run.status)) return;
   if (run.status === "QUEUED") {
     const claimed = await database.processingRun.updateMany({
@@ -164,7 +175,9 @@ export async function processWalkthrough(
         });
       });
     }
+    stage = "EXTRACTING_OBSERVATIONS";
     await transitionProcessingRun(runId, "EXTRACTING_OBSERVATIONS", {}, database);
+    await extractObservations(runId, { database, reasoner: dependencies.reasoner });
   } catch (error) {
     const safe = serializeError(error);
     await transitionProcessingRun(runId, "PROCESSING_FAILED", { failedStep: stage, errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
