@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { SiteThreadError } from "@/lib/errors";
 import { LivepeerMediaIntelligenceProvider, ProviderCallError } from "./provider";
 import { sanitizeProviderResponse } from "./sanitize";
 
@@ -31,6 +32,18 @@ function providerWithRun(run: (request: Record<string, unknown>, call: number) =
 }
 
 describe("Livepeer raw MCP adapter", () => {
+  it("accepts the selected HTTPS endpoint and rejects HTTP before making a request", () => {
+    const fetcher = vi.fn(async () => rpc({})) as unknown as typeof fetch;
+    expect(() => new LivepeerMediaIntelligenceProvider(endpoint, "test-placeholder", fetcher)).not.toThrow();
+    expect(() => new LivepeerMediaIntelligenceProvider("http://agent.livepeer.org/api/mcp/raw", "test-placeholder", fetcher)).toThrowError(SiteThreadError);
+    try {
+      new LivepeerMediaIntelligenceProvider("http://agent.livepeer.org/api/mcp/raw", "test-placeholder", fetcher);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "PROVIDER_CONTRACT_UNRESOLVED" });
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("accepts selected ASR and Marlin text while redacting echoed private URLs", async () => {
     const client = providerWithRun((request) => {
       const capability = ((request.params as { arguments: { capability: string } }).arguments.capability);

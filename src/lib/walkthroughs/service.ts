@@ -128,7 +128,6 @@ export async function getWalkthroughStatus(walkthroughId: string, database: type
 export async function retryWalkthrough(walkthroughId: string, database: typeof db = db) {
   const run = await database.processingRun.findFirst({ where: { walkthroughId, pipelineVersion: PIPELINE_VERSION }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("Walkthrough was not found.", "NOT_FOUND");
-  if (run.status === "PROCESSING_FAILED" && run.retryable === false) throw new SiteThreadError("This processing failure needs corrected media or configuration before retrying.", "PROCESSING_FAILED");
   const asset = run.walkthrough.mediaAssets.find((item) => item.kind === MediaAssetKind.SOURCE_VIDEO);
   if (!asset || asset.status !== MediaAssetStatus.AVAILABLE) throw new SiteThreadError("Upload the source media before retrying processing.", "MEDIA_UNAVAILABLE", true);
   const retried = await retryProcessingRun(run.id, database);

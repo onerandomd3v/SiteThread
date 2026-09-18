@@ -95,7 +95,13 @@ export class LivepeerMediaIntelligenceProvider implements MediaIntelligenceProvi
   private transport: RawMcpTransport;
   private initialized = false;
   constructor(endpoint: string, bearer?: string, fetcher: typeof fetch = fetch) {
-    if (new URL(endpoint).pathname !== "/api/mcp/raw") throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
+    let url: URL;
+    try {
+      url = new URL(endpoint);
+    } catch {
+      throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
+    }
+    if (url.protocol !== "https:" || url.pathname !== "/api/mcp/raw") throw new SiteThreadError("The selected Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
     this.transport = new RawMcpTransport(endpoint, bearer, fetcher);
   }
 

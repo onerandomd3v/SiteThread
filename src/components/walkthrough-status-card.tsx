@@ -67,7 +67,10 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
         {status.run?.errorMessage && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{status.run.errorMessage}</p>}
         {status.run?.failedStep && <p className="text-sm text-slate-600">Failed stage: {status.run.failedStep}</p>}
         <button type="button" onClick={() => void refresh().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The walkthrough status could not be loaded."))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold">Refresh status</button>
-        {status.run?.status === "PROCESSING_FAILED" && status.run.retryable && <button type="button" disabled={retrying} onClick={() => void retry()} className="ml-3 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{retrying ? "Retrying…" : "Retry processing"}</button>}
+        {status.run?.status === "PROCESSING_FAILED" && <>
+          {status.run.retryable === false && <p className="text-sm text-slate-600">Correct the underlying media or deployment configuration before retrying.</p>}
+          <button type="button" disabled={retrying} onClick={() => void retry()} className="ml-3 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{retrying ? "Retrying…" : "Retry processing"}</button>
+        </>}
       </section>}
     </main>
   );

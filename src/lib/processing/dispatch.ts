@@ -18,7 +18,11 @@ export async function dispatchProcessingRun(runId: string): Promise<void> {
       await tasks.trigger("process-walkthrough", { processingRunId: runId }, { idempotencyKey });
     }
   } catch {
-    await db.processingRun.updateMany({ where: { id: runId, status: "QUEUED" }, data: { status: "PROCESSING_FAILED", failedStep: "DISPATCH", errorCode: "PROCESSING_FAILED", errorMessage: "Background processing could not be started.", retryable: true } });
+    const failed = await db.processingRun.updateMany({ where: { id: runId, status: "QUEUED" }, data: { status: "PROCESSING_FAILED", failedStep: "DISPATCH", errorCode: "PROCESSING_FAILED", errorMessage: "Background processing could not be started.", retryable: true } });
+    if (failed.count === 0) {
+      const current = await db.processingRun.findUnique({ where: { id: runId } });
+      if (current && ["TRANSCRIBING", "ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS"].includes(current.status)) return;
+    }
     throw new SiteThreadError("Background processing could not be started.", "PROCESSING_FAILED", true);
   }
 }
