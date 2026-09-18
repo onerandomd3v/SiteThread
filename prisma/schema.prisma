@@ -148,8 +148,9 @@ model TranscriptSegment {
   sourceAsset   MediaAsset?           @relation(fields: [sourceAssetId], references: [id], onDelete: SetNull)
   evidence      ObservationEvidence[]
 
-  @@unique([walkthroughId, sequence])
+  @@index([walkthroughId, sequence])
   @@index([walkthroughId, startSeconds])
+  @@index([processingRunId, sequence])
   @@unique([processingRunId, sourceAssetId, startSeconds, endSeconds])
 }
 

@@ -1,6 +1,6 @@
 import type { SafeJson } from "./types";
 
-const PRIVATE_KEY = /authorization|token|secret|password|source_url|audio_url|video_url|signed.?url|access.?key|(^|_)url$/i;
+const PRIVATE_KEY = /authorization|token|secret|password|source_url|audio_url|video_url|signed.?url|access.?key|(^|_)url$|(?:^|_)(?:headers?|request|config|env|query|signature|credential|cookie)(?:$|_)/i;
 const URL = /https?:\/\/[^\s"'<>]+/gi;
 const BEARER = /Bearer\s+[^\s"']+/gi;
 const LOCAL_PATH = /(?:[A-Za-z]:\\|\/Users\/|\/home\/)[^\s"'<>]+/gi;

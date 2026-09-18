@@ -60,12 +60,18 @@ export async function processWalkthrough(
   const run = await database.processingRun.findUnique({ where: { id: runId }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("The processing run was not found.", "NOT_FOUND");
   if (run.status === "EXTRACTING_OBSERVATIONS") return;
-  if (run.status !== "QUEUED") return;
+  if (!["QUEUED", "TRANSCRIBING", "ANALYZING_MEDIA"].includes(run.status)) return;
+  if (run.status === "QUEUED") {
+    const claimed = await database.processingRun.updateMany({
+      where: { id: runId, status: "QUEUED" },
+      data: { status: "TRANSCRIBING", startedAt: new Date(), failedStep: null, errorCode: null, errorMessage: null, retryable: null },
+    });
+    if (claimed.count !== 1) return;
+  }
   const source = run.walkthrough.mediaAssets.find((asset) => asset.kind === MediaAssetKind.SOURCE_VIDEO && asset.status === MediaAssetStatus.AVAILABLE);
   let directory: string | undefined;
-  let stage = "TRANSCRIBING";
+  let stage = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
   try {
-    await transitionProcessingRun(runId, "TRANSCRIBING", {}, database);
     if (!source) throw new SiteThreadError("The private source walkthrough is unavailable.", "MEDIA_UNAVAILABLE");
     const provider = dependencies.provider ?? configuredMediaProvider();
     directory = await mkdtemp(join(tmpdir(), "sitethread-media-"));
@@ -79,8 +85,9 @@ export async function processWalkthrough(
     const windows = audioWindows(duration);
     await provider.discoverCapabilities();
 
-    for (const [sequence, range] of windows.entries()) {
-      const existing = await database.transcriptSegment.findUnique({ where: { walkthroughId_sequence: { walkthroughId: run.walkthroughId, sequence } } });
+    for (const [sequence, range] of (run.status === "ANALYZING_MEDIA" ? [] : windows).entries()) {
+      const identity = { processingRunId: runId, sourceAssetId: source.id, startSeconds: range.startSeconds, endSeconds: range.endSeconds };
+      const existing = await database.transcriptSegment.findUnique({ where: { processingRunId_sourceAssetId_startSeconds_endSeconds: identity } });
       if (existing?.processingRunId === runId && existing.sourceAssetId === source.id && existing.startSeconds === range.startSeconds && existing.endSeconds === range.endSeconds && existing.text.trim()) continue;
       const audioPath = join(directory, `audio-${sequence}.wav`);
       const objectKey = `walkthroughs/${run.walkthroughId}/temporary/${runId}/audio-${sequence}.wav`;
@@ -99,7 +106,7 @@ export async function processWalkthrough(
         await database.$transaction(async (tx) => {
           await saveInvocation(tx, runId, stage, range, result.diagnostic);
           await tx.transcriptSegment.upsert({
-            where: { walkthroughId_sequence: { walkthroughId: run.walkthroughId, sequence } },
+            where: { processingRunId_sourceAssetId_startSeconds_endSeconds: identity },
             create: { walkthroughId: run.walkthroughId, processingRunId: runId, sourceAssetId: source.id, sequence, startSeconds: range.startSeconds, endSeconds: range.endSeconds, text: result.value.text },
             update: { processingRunId: runId, sourceAssetId: source.id, startSeconds: range.startSeconds, endSeconds: range.endSeconds, text: result.value.text },
           });
@@ -111,7 +118,7 @@ export async function processWalkthrough(
     }
 
     stage = "ANALYZING_MEDIA";
-    await transitionProcessingRun(runId, "ANALYZING_MEDIA", {}, database);
+    if (run.status !== "ANALYZING_MEDIA") await transitionProcessingRun(runId, "ANALYZING_MEDIA", {}, database);
     const transcript = await database.transcriptSegment.findMany({ where: { walkthroughId: run.walkthroughId, processingRunId: runId }, orderBy: { sequence: "asc" } });
     const clips = visualClips(duration, transcript.map(({ startSeconds, endSeconds, text }) => ({ startSeconds, endSeconds, text })));
     for (const [index, range] of clips.entries()) {

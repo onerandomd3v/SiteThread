@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { canTransitionProcessingStatus } from "./lifecycle";
+import type { db } from "@/lib/db/client";
+import { canTransitionProcessingStatus, retryProcessingRun } from "./lifecycle";
 
 describe("processing lifecycle", () => {
   it("allows the upload and durable queue transitions", () => {
@@ -12,5 +13,24 @@ describe("processing lifecycle", () => {
     expect(canTransitionProcessingStatus("PROCESSING_FAILED", "QUEUED")).toBe(true);
     expect(canTransitionProcessingStatus("UPLOADING", "NEEDS_REVIEW")).toBe(false);
     expect(canTransitionProcessingStatus("REPORT_READY", "QUEUED")).toBe(false);
+  });
+
+  it("increments the retry count once when two requests race to retry the same run", async () => {
+    const run = { id: "run", walkthroughId: "walk", status: "PROCESSING_FAILED", retryCount: 0 };
+    const database = {
+      processingRun: {
+        findUnique: async () => ({ ...run }),
+        findUniqueOrThrow: async () => ({ ...run }),
+        updateMany: async ({ where }: { where: { status: string } }) => {
+          if (run.status !== where.status) return { count: 0 };
+          run.status = "QUEUED";
+          run.retryCount += 1;
+          return { count: 1 };
+        },
+      },
+    } as unknown as typeof db;
+    await Promise.all([retryProcessingRun("run", database), retryProcessingRun("run", database)]);
+    expect(run.retryCount).toBe(1);
+    expect(run.status).toBe("QUEUED");
   });
 });

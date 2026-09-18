@@ -81,11 +81,14 @@ describe("Livepeer raw MCP adapter", () => {
   });
 
   it("redacts provider echoes and credentials in diagnostic payloads", () => {
-    const sanitized = sanitizeProviderResponse({ source_url: signedUrl, authorization: "Bearer secret", result: { text: `See ${signedUrl} and Bearer abc` } });
+    const sanitized = sanitizeProviderResponse({ source_url: signedUrl, authorization: "Bearer secret", result: { text: `See ${signedUrl} and Bearer abc`, nested: { request_headers: { Authorization: "Bearer nested-secret" }, url: signedUrl, useful: "retained" } } });
     const text = JSON.stringify(sanitized);
     expect(text).not.toContain("secret");
     expect(text).not.toContain("private.example");
     expect(text).not.toContain("Bearer abc");
+    expect(text).not.toContain("nested-secret");
+    expect(text).not.toContain("request_headers");
+    expect(text).toContain("retained");
     expect(sanitizeProviderResponse({ text: `encoded https%3A%2F%2Fprivate.example%2Fmedia%3FX-Amz%2DSignature%3Dtoken` })).toEqual({ text: "[redacted media reference]" });
   });
 });

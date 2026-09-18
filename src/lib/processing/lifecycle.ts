@@ -55,9 +55,10 @@ export async function retryProcessingRun(runId: string, database: Prisma.Transac
   const current = await database.processingRun.findUnique({ where: { id: runId } });
   if (!current) throw new Error("Processing run not found.");
   if (current.status !== "PROCESSING_FAILED") return { id: current.id, walkthroughId: current.walkthroughId, status: current.status };
-  const updated = await database.processingRun.update({
-    where: { id: runId },
+  await database.processingRun.updateMany({
+    where: { id: runId, status: "PROCESSING_FAILED" },
     data: { status: "QUEUED", retryCount: { increment: 1 }, failedStep: null, errorCode: null, errorMessage: null, retryable: null },
   });
+  const updated = await database.processingRun.findUniqueOrThrow({ where: { id: runId } });
   return { id: updated.id, walkthroughId: updated.walkthroughId, status: updated.status };
 }

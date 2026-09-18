@@ -10,7 +10,7 @@ function scenario(failVisualOnce = false) {
   const source = { id: "source", walkthroughId: "walk", kind: "SOURCE_VIDEO", status: "AVAILABLE", objectKey: "private/source.mp4", mimeType: "video/mp4", byteSize: 1000, durationSeconds: null as number | null };
   const assets = new Map<string, Record<string, unknown>>([[source.id, source]]);
   const run = { id: "run", walkthroughId: "walk", pipelineVersion: "mvp-upload-v1", status: "QUEUED", retryCount: 0, failedStep: null as string | null, errorCode: null as string | null, errorMessage: null as string | null };
-  const segments = new Map<number, Record<string, unknown>>();
+  const segments = new Map<string, Record<string, unknown>>();
   const candidates = new Map<string, Record<string, unknown>>();
   const invocations = new Map<string, Record<string, unknown>>();
   const transitions: string[] = [];
@@ -25,6 +25,14 @@ function scenario(failVisualOnce = false) {
         transitions.push(run.status);
         return { ...run };
       },
+      updateMany: async ({ where, data }: { where: { status: string }; data: Record<string, unknown> }) => {
+        if (run.status !== where.status) return { count: 0 };
+        if (data.retryCount && typeof data.retryCount === "object") run.retryCount += 1;
+        Object.assign(run, { ...data, retryCount: run.retryCount });
+        transitions.push(run.status);
+        return { count: 1 };
+      },
+      findUniqueOrThrow: async () => ({ ...run }),
     },
     walkthrough: { update: async () => ({}) },
     mediaAsset: {
@@ -32,13 +40,16 @@ function scenario(failVisualOnce = false) {
       upsert: async ({ where, create }: { where: { id: string }; create: Record<string, unknown> }) => { if (!assets.has(where.id)) assets.set(where.id, { ...create }); return { ...assets.get(where.id)! }; },
     },
     transcriptSegment: {
-      findUnique: async ({ where }: { where: { walkthroughId_sequence: { sequence: number } } }) => segments.get(where.walkthroughId_sequence.sequence) ?? null,
-      upsert: async ({ where, create, update }: { where: { walkthroughId_sequence: { sequence: number } }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
-        const sequence = where.walkthroughId_sequence.sequence;
-        segments.set(sequence, { ...(segments.get(sequence) ?? create), ...update });
-        return segments.get(sequence);
+      findUnique: async ({ where }: { where: { processingRunId_sourceAssetId_startSeconds_endSeconds: { processingRunId: string; sourceAssetId: string; startSeconds: number; endSeconds: number } } }) => {
+        const key = JSON.stringify(where.processingRunId_sourceAssetId_startSeconds_endSeconds);
+        return segments.get(key) ?? null;
       },
-      findMany: async () => [...segments.values()].sort((left, right) => Number(left.sequence) - Number(right.sequence)),
+      upsert: async ({ where, create, update }: { where: { processingRunId_sourceAssetId_startSeconds_endSeconds: { processingRunId: string; sourceAssetId: string; startSeconds: number; endSeconds: number } }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        const key = JSON.stringify(where.processingRunId_sourceAssetId_startSeconds_endSeconds);
+        segments.set(key, { ...(segments.get(key) ?? create), ...update });
+        return segments.get(key);
+      },
+      findMany: async () => [...segments.values()].filter((segment) => segment.processingRunId === run.id).sort((left, right) => Number(left.sequence) - Number(right.sequence)),
     },
     providerInvocation: {
       upsert: async ({ where, create, update }: { where: { idempotencyKey: string }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
@@ -111,5 +122,21 @@ describe("COD-17 processing pipeline", () => {
     expect(state.providerKeys).toHaveLength(4);
     expect(state.providerKeys[2]).toBe(state.providerKeys[3]);
     expect(providerInvocationKey("run", "mvp-upload-v1", "ANALYZING_MEDIA", "marlin-video", { startSeconds: 0, endSeconds: 6 })).toBe(state.providerKeys[2]);
+    expect(state.providerKeys[2]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+  });
+
+  it("keeps transcript windows from another pipeline run and resumes a redelivered worker", async () => {
+    const state = scenario();
+    const oldIdentity = { processingRunId: "older-run", sourceAssetId: "source", startSeconds: 0, endSeconds: 6 };
+    state.segments.set(JSON.stringify(oldIdentity), { ...oldIdentity, walkthroughId: "walk", sequence: 0, text: "Earlier version" });
+    state.run.status = "TRANSCRIBING";
+    await processWalkthrough("run", state);
+    expect(state.segments.size).toBe(3);
+    expect(state.segments.get(JSON.stringify(oldIdentity))?.text).toBe("Earlier version");
+    expect(state.transitions).toEqual(["ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS"]);
+    state.run.status = "ANALYZING_MEDIA";
+    await processWalkthrough("run", state);
+    expect(state.segments.size).toBe(3);
+    expect(state.candidates.size).toBe(1);
   });
 });

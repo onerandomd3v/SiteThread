@@ -1,3 +1,6 @@
+-- DropIndex
+DROP INDEX "TranscriptSegment_walkthroughId_sequence_key";
+
 -- AlterTable
 ALTER TABLE "ProcessingRun" ADD COLUMN     "retryable" BOOLEAN;
 
@@ -58,6 +61,12 @@ CREATE INDEX "VisualCandidate_walkthroughId_sourceStartSeconds_idx" ON "VisualCa
 
 -- CreateIndex
 CREATE UNIQUE INDEX "VisualCandidate_processingRunId_mediaAssetId_key" ON "VisualCandidate"("processingRunId", "mediaAssetId");
+
+-- CreateIndex
+CREATE INDEX "TranscriptSegment_walkthroughId_sequence_idx" ON "TranscriptSegment"("walkthroughId", "sequence");
+
+-- CreateIndex
+CREATE INDEX "TranscriptSegment_processingRunId_sequence_idx" ON "TranscriptSegment"("processingRunId", "sequence");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "TranscriptSegment_processingRunId_sourceAssetId_startSecond_key" ON "TranscriptSegment"("processingRunId", "sourceAssetId", "startSeconds", "endSeconds");
