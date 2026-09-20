@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { fileValidationMessage, MAX_WALKTHROUGH_UPLOAD_BYTES } from "@/lib/walkthroughs/upload-policy";
+import { processingStatusLabel } from "@/lib/processing/status-labels";
 
 type Project = { id: string; name: string };
 type Run = { id: string; status: string; retryCount: number; errorMessage: string | null };
@@ -26,7 +28,7 @@ function uploadWithProgress(url: string, file: File, headers: Record<string, str
   });
 }
 
-export function WalkthroughUploadPanel() {
+export function WalkthroughUploadPanel({ onProjectSelected }: { onProjectSelected?: (projectId: string) => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
@@ -39,6 +41,7 @@ export function WalkthroughUploadPanel() {
   const [busy, setBusy] = useState(false);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [uploadIntentKey, setUploadIntentKey] = useState<string | null>(null);
+  const router = useRouter();
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === projectId), [projects, projectId]);
 
@@ -49,14 +52,14 @@ export function WalkthroughUploadPanel() {
       .then((result) => {
         if (cancelled) return;
         setProjects(result.projects);
-        if (result.projects[0]) setProjectId(result.projects[0].id);
+        if (result.projects[0]) { setProjectId(result.projects[0].id); onProjectSelected?.(result.projects[0].id); }
       })
       .catch((caught: unknown) => {
         if (!cancelled) setError(caught instanceof Error ? caught.message : "Projects could not be loaded.");
       })
       .finally(() => { if (!cancelled) setProjectsLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [onProjectSelected]);
 
   async function createProject() {
     setError(null);
@@ -64,6 +67,7 @@ export function WalkthroughUploadPanel() {
       const result = await readJson<{ project: Project }>(await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: newProjectName }) }));
       setProjects((current) => [result.project, ...current]);
       setProjectId(result.project.id);
+      onProjectSelected?.(result.project.id);
       setUploadIntentKey(null);
       setNewProjectName("");
     } catch (caught) {
@@ -87,7 +91,8 @@ export function WalkthroughUploadPanel() {
       if (!intent.uploadUrl) {
         const existing = await readJson<{ run: Run | null }>(await fetch(`/api/walkthroughs/${intent.walkthroughId}/status`, { cache: "no-store" }));
         setRun(existing.run);
-        setMessage("This upload intent is already finalized; no new browser upload URL was issued.");
+        setMessage("Upload already complete. Opening processing status…");
+        router.push(`/walkthroughs/${intent.walkthroughId}`);
         return;
       }
       setMessage("Uploading directly to private storage…");
@@ -95,7 +100,8 @@ export function WalkthroughUploadPanel() {
       setMessage("Verifying the upload and queueing processing…");
       const finalized = await readJson<{ run: Run }>(await fetch(`/api/walkthroughs/${intent.walkthroughId}/finalize`, { method: "POST" }));
       setRun(finalized.run);
-      setMessage("The walkthrough is queued. Livepeer processing will be attached by the next pipeline issue.");
+      setMessage("Upload complete. Opening processing status…");
+      router.push(`/walkthroughs/${intent.walkthroughId}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The walkthrough could not be uploaded.");
       setMessage(null);
@@ -121,12 +127,13 @@ export function WalkthroughUploadPanel() {
         </div>
         <label className="grid gap-2 text-sm font-medium text-slate-700">
           Existing project
-          <select value={projectId} onChange={(event) => { setProjectId(event.target.value); setUploadIntentKey(null); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2" disabled={busy || projectsLoading}>
+          <select value={projectId} onChange={(event) => { setProjectId(event.target.value); onProjectSelected?.(event.target.value); setUploadIntentKey(null); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2" disabled={busy || projectsLoading}>
             <option value="">Select a project</option>
             {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
         </label>
         {projectsLoading && <p className="text-sm text-slate-500" role="status">Loading projects…</p>}
+        {!projectsLoading && projects.length === 0 && !error && <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">No projects yet. Create a project to start a walkthrough.</p>}
         <div className="flex gap-2">
           <input value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="New project name" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" disabled={busy} />
           <button type="button" onClick={() => void createProject()} className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled={busy || !newProjectName.trim()}>Create</button>
@@ -139,11 +146,12 @@ export function WalkthroughUploadPanel() {
           <input type="file" accept="video/mp4,.mp4" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setUploadIntentKey(null); }} className="block w-full rounded-lg border border-slate-300 p-3 text-sm" disabled={busy} />
         </label>
         {file && <p className="text-sm text-slate-600">{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</p>}
-        <button type="button" onClick={() => void startUpload()} disabled={busy || !selectedProject || !file} className="w-full rounded-lg bg-emerald-700 px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Working…" : "Upload walkthrough"}</button>
+        <button type="button" onClick={() => void startUpload()} disabled={busy || !selectedProject || !file} className="w-full rounded-lg bg-emerald-700 px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Preparing upload…" : "Upload walkthrough"}</button>
         {progress > 0 && progress < 100 && <progress value={progress} max={100} className="h-2 w-full" aria-label={`Upload ${progress}% complete`} />}
         {message && <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700" role="status">{message}</p>}
         {run?.status === "PROCESSING_FAILED" && <button type="button" onClick={() => void retryProcessing()} disabled={busy} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold">Retry processing</button>}
-        {run && <p className="text-sm font-medium text-slate-700">Run status: <span className="font-mono">{run.status}</span>{walkthroughId && <> · <a className="underline" href={`/walkthroughs/${walkthroughId}`}>Open status page</a></>}</p>}
+        {!file && <p className="text-sm text-slate-500">Choose an MP4 walkthrough to begin.</p>}
+        {run && <p className="text-sm font-medium text-slate-700">Status: <span>{processingStatusLabel(run.status)}</span>{walkthroughId && <> · <a className="underline" href={`/walkthroughs/${walkthroughId}`}>Open walkthrough</a></>}</p>}
         {error && <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
       </div>
     </section>

@@ -126,6 +126,52 @@ export async function getWalkthroughStatus(walkthroughId: string, database: type
   return { walkthrough: { id: record.id, title: record.title, project: record.project }, asset: { id: asset.id, status: asset.status, mimeType: asset.mimeType, byteSize: asset.byteSize }, run: run ? publicRun(run) : null, report };
 }
 
+export async function listRecentWalkthroughs(projectId: string, database: typeof db = db) {
+  const project = await database.project.findUnique({ where: { id: projectId }, select: { id: true } });
+  if (!project) throw new SiteThreadError("Project was not found.", "NOT_FOUND");
+
+  const walkthroughs = await database.walkthrough.findMany({
+    where: { projectId },
+    orderBy: { updatedAt: "desc" },
+    take: 5,
+    select: {
+      id: true,
+      title: true,
+      createdAt: true,
+      updatedAt: true,
+      processingRuns: {
+        where: { pipelineVersion: PIPELINE_VERSION },
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+        select: { id: true, status: true, updatedAt: true },
+      },
+    },
+  });
+
+  const currentRuns = walkthroughs.flatMap((walkthrough) => walkthrough.processingRuns[0] ? [{ walkthroughId: walkthrough.id, runId: walkthrough.processingRuns[0].id }] : []);
+  const reports = currentRuns.length === 0
+    ? []
+    : await database.report.findMany({
+      where: { OR: currentRuns.map(({ walkthroughId, runId }) => ({ walkthroughId, observations: { some: { observation: { processingRunId: runId } } } })) },
+      orderBy: { generatedAt: "desc" },
+      select: { id: true, walkthroughId: true },
+    });
+  const latestReportByWalkthrough = new Map<string, { id: string }>();
+  for (const report of reports) if (!latestReportByWalkthrough.has(report.walkthroughId)) latestReportByWalkthrough.set(report.walkthroughId, { id: report.id });
+
+  return walkthroughs.map((walkthrough) => {
+    const run = walkthrough.processingRuns[0] ?? null;
+    return {
+      id: walkthrough.id,
+      title: walkthrough.title,
+      createdAt: walkthrough.createdAt,
+      updatedAt: walkthrough.updatedAt,
+      run: run ? { status: run.status, updatedAt: run.updatedAt } : { status: "UPLOAD_PENDING", updatedAt: walkthrough.updatedAt },
+      report: run?.status === "REPORT_READY" ? latestReportByWalkthrough.get(walkthrough.id) ?? null : null,
+    };
+  });
+}
+
 export async function retryWalkthrough(walkthroughId: string, database: typeof db = db) {
   const run = await database.processingRun.findFirst({ where: { walkthroughId, pipelineVersion: PIPELINE_VERSION }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("Walkthrough was not found.", "NOT_FOUND");
