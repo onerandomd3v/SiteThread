@@ -35,3 +35,8 @@ export async function extractAudioWindow(sourcePath: string, outputPath: string,
 export async function extractVisualClip(sourcePath: string, outputPath: string, range: SourceRange): Promise<void> {
   await mediaCommand(process.env.FFMPEG_PATH ?? "ffmpeg", ["-v", "error", "-y", "-ss", String(range.startSeconds), "-i", sourcePath, "-t", String(range.endSeconds - range.startSeconds), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", outputPath], 120_000);
 }
+
+export async function extractVisualFrame(sourcePath: string, outputPath: string, offsetSeconds: number): Promise<void> {
+  if (!Number.isFinite(offsetSeconds) || offsetSeconds < 0) throw new SiteThreadError("The evidence frame time is invalid.", "MEDIA_UNAVAILABLE");
+  await mediaCommand(process.env.FFMPEG_PATH ?? "ffmpeg", ["-v", "error", "-y", "-ss", String(offsetSeconds), "-i", sourcePath, "-frames:v", "1", "-q:v", "2", "-f", "image2", outputPath], 90_000);
+}

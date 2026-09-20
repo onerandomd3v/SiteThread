@@ -126,6 +126,31 @@ describe("COD-19 finding review", () => {
     await expect(getWalkthroughReview("missing", { database: missingDatabase, storage: state.storage })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("reads a completed REPORT_READY run as a complete read-only review", async () => {
+    const state = fixture();
+    state.run.status = "REPORT_READY";
+    state.observations[0].reviewState = "CONFIRMED";
+    state.observations[0].reviewerId = MVP_REVIEWER_ID;
+    state.observations[0].reviewedAt = state.reviewedAt;
+
+    const review = await getWalkthroughReview("walk-1", { database: state.database, storage: state.storage });
+
+    expect(review).toMatchObject({ runStatus: "REPORT_READY", reviewedCount: 1, remainingDrafts: 0, complete: true });
+  });
+
+  it("rejects empty-review and observation mutations after REPORT_READY", async () => {
+    const state = fixture();
+    state.run.status = "REPORT_READY";
+
+    await expect(completeEmptyReview("walk-1", { database: state.database, storage: state.storage })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(reviewObservation("walk-1", "observation-1", { state: "CONFIRMED" }, { database: state.database, storage: state.storage })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    state.observations[0].reviewState = "CONFIRMED";
+    state.observations[0].reviewerId = MVP_REVIEWER_ID;
+    state.observations[0].reviewedAt = state.reviewedAt;
+    await expect(reviewObservation("walk-1", "observation-1", { state: "CONFIRMED" }, { database: state.database, storage: state.storage })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
   it("does not expose a media URL when the cited asset is unavailable", async () => {
     const state = fixture();
     state.observations[0].evidence[0].transcriptSegment = null;

@@ -136,7 +136,7 @@ async function reviewSnapshot(
     totalCount: mapped.length,
     reviewedCount: mapped.length - remainingDrafts,
     remainingDrafts,
-    complete: run.status === "REVIEWED" && remainingDrafts === 0,
+    complete: (run.status === "REVIEWED" || run.status === "REPORT_READY") && remainingDrafts === 0,
   });
 }
 
@@ -149,7 +149,7 @@ export async function getWalkthroughReview(
   const walkthrough = await database.walkthrough.findUnique({ where: { id: walkthroughId }, select: { id: true } });
   if (!walkthrough) throw new SiteThreadError("The walkthrough was not found.", "NOT_FOUND");
   if (!run) throw new SiteThreadError("The walkthrough processing run was not found.", "NOT_FOUND");
-  if (run.status !== "NEEDS_REVIEW" && run.status !== "REVIEWED") throw new SiteThreadError("Findings are not ready for review.", "CONFLICT");
+  if (run.status !== "NEEDS_REVIEW" && run.status !== "REVIEWED" && run.status !== "REPORT_READY") throw new SiteThreadError("Findings are not ready for review.", "CONFLICT");
   const storage = dependencies.storage ?? r2MediaStorage;
   return reviewSnapshot(database, run, storage);
 }
@@ -197,6 +197,10 @@ export async function reviewObservation(
     const existing = await transaction.observation.findUnique({ where: { id: observationId }, include: observationInclude });
     if (!existing || existing.walkthroughId !== walkthroughId || existing.processingRunId !== run.id) {
       throw new SiteThreadError("The observation was not found for this walkthrough run.", "NOT_FOUND");
+    }
+
+    if (run.status === "REPORT_READY") {
+      throw new SiteThreadError("This walkthrough is not accepting review decisions.", "CONFLICT");
     }
 
     if (existing.reviewState !== "DRAFT") {
