@@ -228,7 +228,6 @@ model Observation {
 
   @@unique([processingRunId, sequence])
   @@index([walkthroughId, reviewState])
-  @@index([processingRunId, sequence])
 }
 
 model ObservationEvidence {

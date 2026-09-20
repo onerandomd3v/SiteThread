@@ -4,7 +4,6 @@ ALTER TABLE "Observation" ADD COLUMN "sequence" INTEGER;
 ALTER TABLE "Observation" ADD COLUMN "suggestedAction" TEXT;
 
 -- CreateIndex
-CREATE INDEX "Observation_processingRunId_sequence_idx" ON "Observation"("processingRunId", "sequence");
 CREATE UNIQUE INDEX "Observation_processingRunId_sequence_key" ON "Observation"("processingRunId", "sequence");
 
 -- AddForeignKey
