@@ -8,6 +8,7 @@ function scenario() {
   const created: Record<string, unknown>[] = [];
   const evidence: Record<string, unknown>[] = [];
   const invocations: Record<string, unknown>[] = [];
+  const reasonerInputs: unknown[] = [];
   const database = {
     processingRun: {
       findUnique: async () => ({ ...run }),
@@ -27,12 +28,15 @@ function scenario() {
     },
   } as unknown as typeof db;
   const reasoner: ObservationReasoner = {
-    extract: async () => ({
+    extract: async (input) => {
+      reasonerInputs.push(input);
+      return {
       value: { observations: [{ type: "potential_issue", description: "Water is visible and reported at the doorway.", suggestedAction: "Ask the site supervisor to review the visible condition.", evidenceRefs: ["T0", "V0"] }] },
       diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "reasoning-key", rawResponse: { fixture: true }, latencyMs: 0 },
-    }),
+      };
+    },
   };
-  return { database, reasoner, run, created, evidence, invocations };
+  return { database, reasoner, run, created, evidence, invocations, reasonerInputs };
 }
 
 describe("observation extraction persistence", () => {
@@ -55,7 +59,14 @@ describe("observation extraction persistence", () => {
       { transcriptSegmentId: "segment-1", mediaAssetId: "source-1", sourceStartSeconds: 0, sourceEndSeconds: 6, label: "Narration 00:00–00:06" },
       { mediaAssetId: "clip-1", sourceStartSeconds: 1, sourceEndSeconds: 3, label: "Visual evidence 00:01–00:03" },
     ] });
-    expect(state.invocations[0]).toMatchObject({ stage: "EXTRACTING_OBSERVATIONS", capability: "gemini-text", status: "SUCCEEDED" });
+    expect(state.invocations[0]).toMatchObject({ stage: "EXTRACTING_OBSERVATIONS", capability: "gemini-text", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6 });
+    expect(state.reasonerInputs[0]).toEqual({
+      idempotencyKey: expect.stringMatching(/^[a-f0-9]{64}$/),
+      evidence: [
+        { ref: "T0", kind: "transcript", text: "The supervisor reports water at the doorway." },
+        { ref: "V0", kind: "visual", text: "Water is visible beside the doorway." },
+      ],
+    });
   });
 
   it("does not persist when the reasoner returns an unknown evidence reference", async () => {
@@ -64,6 +75,17 @@ describe("observation extraction persistence", () => {
     await expect(extractObservations("run-1", { database: state.database, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
     expect(state.created).toHaveLength(0);
     expect(state.run.status).toBe("EXTRACTING_OBSERVATIONS");
+  });
+
+  it("persists no unsupported drafts but still reaches review", async () => {
+    const state = scenario();
+    state.reasoner.extract = async () => ({
+      value: { observations: [{ type: "potential_issue", description: "A structural crack is visible in the beam.", evidenceRefs: ["V0"] }] },
+      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "safe-key", rawResponse: {}, latencyMs: 0 },
+    });
+    await extractObservations("run-1", { database: state.database, reasoner: state.reasoner });
+    expect(state.created).toHaveLength(0);
+    expect(state.run.status).toBe("NEEDS_REVIEW");
   });
 
   it("is a no-op after the run has reached review", async () => {

@@ -41,9 +41,9 @@ describe("observation evidence grounding", () => {
   it("gives the reasoner only labeled normalized text evidence", () => {
     const built = context();
     expect(built.evidence).toEqual([
-      { ref: "T0", kind: "transcript", startSeconds: 6, endSeconds: 12, text: "At the north doorway, the supervisor reports water and asks for waterproofing review." },
-      { ref: "V0", kind: "visual", startSeconds: 7, endSeconds: 9, text: "Water is visible beside the north doorway." },
-      { ref: "V1", kind: "visual", startSeconds: 18, endSeconds: 24, text: "Installed conduit is visible." },
+      { ref: "T0", kind: "transcript", text: "At the north doorway, the supervisor reports water and asks for waterproofing review." },
+      { ref: "V0", kind: "visual", text: "Water is visible beside the north doorway." },
+      { ref: "V1", kind: "visual", text: "Installed conduit is visible." },
     ]);
     expect(JSON.stringify(built.evidence)).not.toContain("db-id");
   });
@@ -60,13 +60,13 @@ describe("observation evidence grounding", () => {
   });
 
   it.each([
-    [["T0"], "NARRATION"],
-    [["V0"], "VISUAL"],
-    [["T0", "V0"], "NARRATION_AND_VISUAL"],
-  ] as const)("derives source basis from cited references %j", (evidenceRefs, sourceBasis) => {
+    [["T0"], "NARRATION", "Water is reported beside the north doorway and requires professional review."],
+    [["V0"], "VISUAL", "Water is visible beside the north doorway."],
+    [["T0", "V0"], "NARRATION_AND_VISUAL", "Water is visible and reported beside the north doorway."],
+  ] as const)("derives source basis from cited references %j", (evidenceRefs, sourceBasis, description) => {
     const drafts = groundReasonedObservations(output([{
       type: "potential_issue",
-      description: "Water is reported beside the north doorway and requires professional review.",
+      description,
       evidenceRefs: [...evidenceRefs],
     }]), context());
     expect(drafts[0].sourceBasis).toBe(sourceBasis);
@@ -119,5 +119,102 @@ describe("observation evidence grounding", () => {
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).not.toHaveProperty("location");
     expect(drafts[0]).toMatchObject({ trade: "Waterproofing" });
+  });
+
+  it("rejects a claim that the cited water evidence supports a structural crack", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "potential_issue",
+      description: "A structural crack is visible in the beam.",
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("rejects a generic safety conclusion even when it cites real evidence", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "The area is safe to enter.",
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("rejects cross-source claims that only become true by combining unrelated evidence", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible in the conduit.",
+      evidenceRefs: ["V0", "V1"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("rejects a changed spatial relationship", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible in the north doorway.",
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("rejects an unrelated cited evidence item instead of upgrading source basis", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is reported at the north doorway.",
+      evidenceRefs: ["T0", "V1"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("allows a directly supported condition with a review-oriented follow-up", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "potential_issue",
+      description: "Water is visible beside the north doorway.",
+      suggestedAction: "Ask the site supervisor to review the visible condition.",
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toHaveLength(1);
+  });
+
+  it("rejects unrelated claims and remediation hidden inside a review action", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "potential_issue",
+      description: "Water is visible beside the north doorway.",
+      suggestedAction: "Ask the supervisor to review the gas leak and patch it.",
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it.each([
+    "Water is visible because the membrane failed.",
+    "Water is 80% complete.",
+    "Water creates a payment entitlement.",
+    "Repair the doorway immediately.",
+    "The inspector signed off the work.",
+    "Water led to the failure.",
+  ])("rejects unsupported claim language: %s", (description) => {
+    const drafts = groundReasonedObservations(output([{
+      type: "action",
+      description,
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("removes provider time markers before model-facing evidence is built", () => {
+    const built = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-marked",
+        mediaAssetId: "clip-marked",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 6,
+        eventStartSeconds: 0,
+        eventEndSeconds: 3,
+        text: "<0.0 - 3.0> Water is visible beside the north doorway.",
+      }],
+    });
+    expect(built.evidence[0].text).toBe("Water is visible beside the north doorway.");
   });
 });

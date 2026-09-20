@@ -3,15 +3,10 @@ import { FixtureObservationReasoner, LivepeerObservationReasoner } from "./reaso
 import type { ObservationReasoningInput } from "./types";
 
 const input: ObservationReasoningInput = {
-  runId: "run-1",
-  walkthroughId: "walk-1",
-  pipelineVersion: "mvp-upload-v1",
-  retryCount: 0,
-  reasoningVersion: "observation-v1",
-  evidenceFingerprint: "fingerprint-1",
+  idempotencyKey: "observation-key-1",
   evidence: [
-    { ref: "T0", kind: "transcript", startSeconds: 0, endSeconds: 6, text: "The supervisor reports water at the north doorway." },
-    { ref: "V0", kind: "visual", startSeconds: 0, endSeconds: 6, text: "Water is visible beside the north doorway." },
+    { ref: "T0", kind: "transcript", text: "The supervisor reports water at the north doorway." },
+    { ref: "V0", kind: "visual", text: "Water is visible beside the north doorway." },
   ],
 };
 
@@ -38,7 +33,7 @@ describe("observation reasoner", () => {
     const result = await new FixtureObservationReasoner().extract(input);
     expect(result.value.observations).toEqual([{
       type: "note",
-      description: "The source evidence describes a construction condition for professional review.",
+      description: "The supervisor reports water at the north doorway.",
       evidenceRefs: ["T0", "V0"],
     }]);
     expect(result.diagnostic.provider).toBe("fixture");
@@ -54,8 +49,40 @@ describe("observation reasoner", () => {
     expect(args).toMatchObject({ capability: "gemini-text", async: false, timeout: 36, persist: false });
     expect(args.idempotency_key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     expect(JSON.stringify(args)).not.toContain("http");
+    expect(JSON.stringify(args)).not.toContain("run-1");
+    expect(JSON.stringify(args)).not.toContain("walk-1");
+    expect(JSON.stringify(args)).not.toContain("source-asset");
+    expect(JSON.stringify(args)).not.toContain("00:00");
     expect(JSON.stringify(args)).toContain("T0");
     expect(JSON.stringify(args)).toContain("V0");
+  });
+
+  it("keeps fixture output valid when evidence exceeds the per-observation reference cap", async () => {
+    const result = await new FixtureObservationReasoner().extract({
+      idempotencyKey: "fixture-key",
+      evidence: Array.from({ length: 13 }, (_, index) => ({
+        ref: `V${index}`,
+        kind: "visual" as const,
+        text: `Condition ${index} is visible.`,
+      })),
+    });
+    expect(result.value.observations.length).toBeGreaterThan(1);
+    expect(result.value.observations.every((observation) => observation.evidenceRefs.length <= 12)).toBe(true);
+  });
+
+  it.each(["failed", "submitted", "running", "queued", "pending"])("rejects a top-level %s provider status", async (status) => {
+    const reasoner = liveReasonerWithStatus(JSON.stringify({ observations: [] }), { status });
+    await expect(reasoner.extract(input)).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
+  });
+
+  it.each(["failed", "submitted", "running", "queued", "pending"])("rejects a nested %s provider status", async (status) => {
+    const reasoner = liveReasonerWithStatus(JSON.stringify({ observations: [] }), { result: { status } });
+    await expect(reasoner.extract(input)).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
+  });
+
+  it("rejects malformed explicit provider status types", async () => {
+    await expect(liveReasonerWithStatus(JSON.stringify({ observations: [] }), { status: 0 }).extract(input)).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
+    await expect(liveReasonerWithStatus(JSON.stringify({ observations: [] }), { result: { status: null } }).extract(input)).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
   });
 
   it("reuses the same provider-safe key for an uncertain retry identity", async () => {
@@ -72,3 +99,16 @@ describe("observation reasoner", () => {
     await expect(reasoner.extract(input)).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
   });
 });
+
+function liveReasonerWithStatus(responseText: string, status: Record<string, unknown>) {
+  const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body)) as { method: string; params?: { name?: string } };
+    if (request.method === "initialize") return rpc({ protocolVersion: "2024-11-05" });
+    if (request.method === "notifications/initialized") return new Response(null, { status: 202 });
+    if (request.method === "tools/list") return rpc({ tools: [{ name: "run_capability" }, { name: "list_capabilities" }, { name: "describe_capability" }] });
+    if (request.params?.name === "list_capabilities") return rpc({ structuredContent: { capabilities: [{ name: "gemini-text" }] } });
+    if (request.params?.name === "describe_capability") return rpc({ structuredContent: { name: "gemini-text", found: true, modality: "text", output_kind: "text", invoke_via: "run_capability" } });
+    return rpc({ structuredContent: { ok: true, capability: "gemini-text", output_kind: "text", ...status, result: { text: responseText, ...(status.result && typeof status.result === "object" ? status.result : {}) } } });
+  }) as typeof fetch;
+  return new LivepeerObservationReasoner("https://agent.livepeer.org/api/mcp/raw", undefined, fetcher);
+}

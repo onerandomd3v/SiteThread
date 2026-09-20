@@ -16,10 +16,11 @@ function observationId(runId: string, fingerprint: string, sequence: number): st
 }
 
 function invocationRange(context: ReturnType<typeof buildReasoningContext>): { startSeconds: number; endSeconds: number } {
-  if (context.evidence.length === 0) return { startSeconds: 0, endSeconds: 0 };
+  const ranges = [...context.references.values()];
+  if (ranges.length === 0) return { startSeconds: 0, endSeconds: 0 };
   return {
-    startSeconds: Math.min(...context.evidence.map((evidence) => evidence.startSeconds)),
-    endSeconds: Math.max(...context.evidence.map((evidence) => evidence.endSeconds)),
+    startSeconds: Math.min(...ranges.map((evidence) => evidence.sourceStartSeconds)),
+    endSeconds: Math.max(...ranges.map((evidence) => evidence.sourceEndSeconds)),
   };
 }
 
@@ -38,13 +39,9 @@ export async function extractObservations(
   ]);
   const context = buildReasoningContext({ transcriptSegments, visualCandidates });
   const reasoner = dependencies.reasoner ?? configuredObservationReasoner();
+  const idempotencyKey = createHash("sha256").update(`${run.id}|${run.pipelineVersion}|${OBSERVATION_REASONING_VERSION}|${context.evidenceFingerprint}|${run.retryCount}`).digest("hex");
   const result = await reasoner.extract({
-    runId,
-    walkthroughId: run.walkthroughId,
-    pipelineVersion: run.pipelineVersion,
-    retryCount: run.retryCount,
-    reasoningVersion: OBSERVATION_REASONING_VERSION,
-    evidenceFingerprint: context.evidenceFingerprint,
+    idempotencyKey,
     evidence: context.evidence,
   });
   const grounded = groundReasonedObservations(result.value, context);

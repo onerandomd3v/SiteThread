@@ -43,15 +43,19 @@ function parseReasoningOutput(text: string, raw: unknown) {
 
 export class FixtureObservationReasoner implements ObservationReasoner {
   async extract(input: ObservationReasoningInput) {
-    const evidenceRefs = input.evidence.map((evidence) => evidence.ref);
-    const observations = evidenceRefs.length === 0 ? [] : [{
-      type: "note" as const,
-      description: "The source evidence describes a construction condition for professional review.",
-      evidenceRefs,
-    }];
+    const observations = [];
+    for (let index = 0; index < input.evidence.length && observations.length < 20; index += 12) {
+      const chunk = input.evidence.slice(index, index + 12);
+      if (chunk.length === 0) continue;
+      observations.push({
+        type: "note" as const,
+        description: chunk[0].text,
+        evidenceRefs: chunk.map((evidence) => evidence.ref),
+      });
+    }
     return {
       value: ObservationReasoningOutputSchema.parse({ observations }),
-      diagnostic: { provider: "fixture", capability: GEMINI_CAPABILITY, idempotencyKey: hashKey("fixture", input.runId, input.reasoningVersion, input.evidenceFingerprint, String(input.retryCount)), rawResponse: { fixture: true } as SafeJson, latencyMs: 0 },
+      diagnostic: { provider: "fixture", capability: GEMINI_CAPABILITY, idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true } as SafeJson, latencyMs: 0 },
     };
   }
 }
@@ -84,9 +88,9 @@ export class LivepeerObservationReasoner implements ObservationReasoner {
 
   async extract(input: ObservationReasoningInput) {
     await this.discover();
-    const idempotencyKey = hashKey("observation", input.runId, input.pipelineVersion, input.reasoningVersion, input.evidenceFingerprint, String(input.retryCount));
+    const idempotencyKey = input.idempotencyKey;
     const started = Date.now();
-    const promptEvidence = input.evidence.map(({ ref, kind, startSeconds, endSeconds, text }) => ({ ref, kind, startSeconds, endSeconds, text: sanitizeResultText(text) }));
+    const promptEvidence = input.evidence.map(({ ref, kind, text }) => ({ ref, kind, text: sanitizeResultText(text) }));
     let raw: unknown;
     try {
       raw = await this.transport.request("tools/call", {
@@ -98,7 +102,7 @@ export class LivepeerObservationReasoner implements ObservationReasoner {
           async: false,
           timeout: GEMINI_TIMEOUT_SECONDS,
           persist: false,
-          session_id: hashKey("session", input.runId),
+          session_id: hashKey("session", idempotencyKey),
           idempotency_key: idempotencyKey,
         },
       }, 60_000);
@@ -109,6 +113,9 @@ export class LivepeerObservationReasoner implements ObservationReasoner {
     const content = providerResultContent(raw);
     if (content.ok !== true || content.capability !== GEMINI_CAPABILITY || content.output_kind !== "text") throw new ProviderCallError("Livepeer returned an unexpected reasoning result.", "PROVIDER_RESULT_INVALID", false, raw);
     const result = content.result && typeof content.result === "object" ? content.result as Record<string, unknown> : {};
+    const explicitStatuses = [content.status, result.status].filter((status) => status !== undefined);
+    const terminalStatuses = new Set(["success", "succeeded", "complete", "completed", "done", "ok"]);
+    if (explicitStatuses.some((status) => typeof status !== "string" || !terminalStatuses.has(status.toLowerCase()))) throw new ProviderCallError("Livepeer returned a nonterminal reasoning result.", "PROVIDER_RESULT_INVALID", false, raw);
     if (typeof result.text !== "string" || !result.text.trim()) throw new ProviderCallError("Livepeer returned no observation drafts.", "PROVIDER_RESULT_INVALID", false, raw);
     const value = parseReasoningOutput(result.text.trim(), raw);
     return { value, diagnostic: { provider: "livepeer", capability: GEMINI_CAPABILITY, idempotencyKey, rawResponse: sanitizeProviderResponse(raw), latencyMs: Date.now() - started } };

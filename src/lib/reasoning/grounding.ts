@@ -25,8 +25,6 @@ interface VisualEvidenceSource {
 export interface ReasoningEvidence {
   ref: string;
   kind: "transcript" | "visual";
-  startSeconds: number;
-  endSeconds: number;
   text: string;
 }
 
@@ -63,7 +61,13 @@ const TYPE_MAP = {
   note: "NOTE",
 } as const;
 
-const UNSUPPORTED_CLAIM = /\b(?:structurally\s+(?:safe|unsafe|sound)|(?:building\s+)?code\s+(?:violation|compliant|noncompliant)|violates?\s+(?:the\s+)?(?:building\s+)?code|(?:passed|failed)\s+inspection|inspection\s+(?:approved|rejected)|engineer(?:ing)?\s+(?:approved|accepted|certified)|certified\s+(?:safe|compliant)|(?:payment|financially)\s+(?:due|entitled)|caused\s+by|due\s+to|\d+(?:\.\d+)?\s*%\s*(?:complete|completed))\b/i;
+const UNSUPPORTED_CLAIM = /\b(?:structur(?:al|ally)|load[- ]bearing|beam|foundation|building\s+code|code\s+(?:violation|compliant|noncompliant)|violates?\s+(?:the\s+)?(?:building\s+)?code|(?:passed|failed)\s+inspection|inspection\s+(?:approved|rejected)|engineer(?:ing)?\s+(?:approved|accepted|certified)|(?:approved|accepted|certified|compliant|compliance|signed\s+off)|certified\s+(?:safe|compliant)|\b(?:safe|unsafe|dangerous|hazardous)\b|(?:clear|okay)\s+to\s+enter|fit\s+for\s+occupancy|(?:payment|financially|cost|budget)\s+(?:due|entitled)|entitlement|\$\s*\d|\d+(?:\.\d+)?\s*(?:%|percent|percentage)|caused?\s+by|due\s+to|because|result(?:ed|ing)?\s+(?:from|in)|leads?\s+to|led\s+to|therefore)\b/i;
+const UNSUPPORTED_REMEDIATION = /\b(?:repair|replace|fix|seal|remove|clean|rework|correct|demolish|secure|patch)\b/i;
+const REVIEW_ACTION = /^\s*(?:ask|have|request|refer|flag|invite)\s+(?:the\s+)?(?:site\s+)?(?:supervisor|professional|reviewer|team)\s+(?:to\s+)?(?:review|follow[- ]?up|inspect|assess|check)\s+(?:the\s+)?(?:visible\s+)?(?:condition|finding|observation|area)\.?\s*$/i;
+const SPATIAL_RELATIONS = new Set(["above", "at", "behind", "beside", "between", "by", "in", "inside", "near", "on", "under"]);
+const STOP_WORDS = new Set([
+  "a", "an", "and", "are", "as", "be", "for", "from", "is", "it", "of", "or", "reported", "reports", "the", "to", "was", "were", "with",
+]);
 
 function sourceRange(source: VisualEvidenceSource): { startSeconds: number; endSeconds: number } {
   const eventStart = source.eventStartSeconds;
@@ -91,6 +95,66 @@ function normalizedText(value: string): string {
   return value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function normalizedEvidenceText(value: string): string {
+  return sanitizeResultText(value)
+    .replace(/<\s*\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*>\s*/g, "")
+    .trim();
+}
+
+function stemToken(value: string): string {
+  if (value.length > 5 && value.endsWith("ies")) return `${value.slice(0, -3)}y`;
+  if (value.length > 5 && value.endsWith("ing")) return value.slice(0, -3);
+  if (value.length > 4 && value.endsWith("ed")) return value.slice(0, -2);
+  if (value.length > 4 && value.endsWith("s")) return value.slice(0, -1);
+  return value;
+}
+
+function factualTokens(value: string): string[] {
+  return normalizedText(value).split(" ").filter((token) => token && !STOP_WORDS.has(token)).map(stemToken);
+}
+
+function spatialRelations(value: string): Set<string> {
+  return new Set(factualTokens(value).filter((token) => SPATIAL_RELATIONS.has(token)));
+}
+
+function claimClauses(value: string): string[] {
+  return value
+    .replace(/\b(?:and\s+)?(?:requires?|needs?)\s+(?:a\s+)?(?:professional|site\s+supervisor|supervisor)?\s*(?:review|follow[- ]?up)\b[\s\S]*$/i, "")
+    .split(/\s*(?:[.;]|\b(?:and|but|while)\b)\s*/i)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+}
+
+function matchesSingleEvidence(clause: string, evidence: ReasoningEvidence): boolean {
+  const claimTokens = factualTokens(clause);
+  if (claimTokens.length === 0) return true;
+  const evidenceTokens = new Set(factualTokens(evidence.text));
+  const claimContent = claimTokens.filter((token) => !SPATIAL_RELATIONS.has(token));
+  const matchingContent = claimContent.filter((token) => evidenceTokens.has(token));
+  const minimumMatches = claimContent.length <= 2 ? claimContent.length : Math.ceil(claimContent.length * 0.75);
+  if (matchingContent.length < minimumMatches) return false;
+  const claimRelations = spatialRelations(clause);
+  const evidenceRelations = spatialRelations(evidence.text);
+  if (claimRelations.has("in") && evidenceRelations.has("beside")) return false;
+  if (claimRelations.has("beside") && evidenceRelations.has("in")) return false;
+  return true;
+}
+
+function isDescriptionGrounded(description: string, resolved: Array<ReasoningEvidence>): boolean {
+  if (UNSUPPORTED_CLAIM.test(description) || UNSUPPORTED_REMEDIATION.test(description)) return false;
+  const hasVisual = resolved.some((evidence) => evidence.kind === "visual");
+  const hasNarration = resolved.some((evidence) => evidence.kind === "transcript");
+  if (/\b(?:visible|seen|shown|appears|looks?)\b/i.test(description) && !hasVisual) return false;
+  if (/\b(?:reported|said|mentioned|narrated)\b/i.test(description) && !hasNarration) return false;
+  const clauses = claimClauses(description);
+  return clauses.every((clause) => resolved.some((evidence) => matchesSingleEvidence(clause, evidence)))
+    && resolved.every((evidence) => clauses.some((clause) => matchesSingleEvidence(clause, evidence)));
+}
+
+function isSuggestedActionAllowed(value: string): boolean {
+  return REVIEW_ACTION.test(value);
+}
+
 function isGroundedOptionalValue(value: string | undefined, evidenceText: string): value is string {
   if (!value) return false;
   const normalized = normalizedText(value);
@@ -105,10 +169,10 @@ export function buildReasoningContext(input: {
   const references = new Map<string, DurableEvidence>();
   let transcriptIndex = 0;
   for (const segment of [...input.transcriptSegments].sort((left, right) => left.sequence - right.sequence)) {
-    const text = sanitizeResultText(segment.text).trim();
+    const text = normalizedEvidenceText(segment.text);
     if (!text) continue;
     const ref = `T${transcriptIndex++}`;
-    evidence.push({ ref, kind: "transcript", startSeconds: segment.startSeconds, endSeconds: segment.endSeconds, text });
+    evidence.push({ ref, kind: "transcript", text });
     references.set(ref, {
       kind: "transcript",
       ...(segment.sourceAssetId ? { mediaAssetId: segment.sourceAssetId } : {}),
@@ -120,11 +184,11 @@ export function buildReasoningContext(input: {
   }
   let visualIndex = 0;
   for (const candidate of [...input.visualCandidates].sort((left, right) => left.sourceStartSeconds - right.sourceStartSeconds)) {
-    const text = sanitizeResultText(candidate.text).trim();
+    const text = normalizedEvidenceText(candidate.text);
     if (!text) continue;
     const ref = `V${visualIndex++}`;
     const range = sourceRange(candidate);
-    evidence.push({ ref, kind: "visual", ...range, text });
+    evidence.push({ ref, kind: "visual", text });
     references.set(ref, {
       kind: "visual",
       mediaAssetId: candidate.mediaAssetId,
@@ -133,7 +197,9 @@ export function buildReasoningContext(input: {
       label: `Visual evidence ${timeLabel(range.startSeconds)}–${timeLabel(range.endSeconds)}`,
     });
   }
-  const evidenceFingerprint = createHash("sha256").update(JSON.stringify(evidence)).digest("hex");
+  const evidenceFingerprint = createHash("sha256")
+    .update(JSON.stringify(evidence.map((item) => ({ ...item, durable: references.get(item.ref) }))))
+    .digest("hex");
   return { evidence, evidenceFingerprint, references };
 }
 
@@ -150,12 +216,13 @@ export function groundReasonedObservations(
   }
 
   return output.observations.flatMap((observation) => {
-    if (UNSUPPORTED_CLAIM.test(observation.description) || (observation.suggestedAction && UNSUPPORTED_CLAIM.test(observation.suggestedAction))) return [];
     const resolved = observation.evidenceRefs.map((ref) => context.references.get(ref)!);
+    const reasoningEvidence = context.evidence.filter((evidence) => observation.evidenceRefs.includes(evidence.ref));
+    if (!isDescriptionGrounded(observation.description, reasoningEvidence)) return [];
+    if (observation.suggestedAction && !isSuggestedActionAllowed(observation.suggestedAction)) return [];
     const hasNarration = resolved.some((evidence) => evidence.kind === "transcript");
     const hasVisual = resolved.some((evidence) => evidence.kind === "visual");
-    const evidenceText = context.evidence
-      .filter((evidence) => observation.evidenceRefs.includes(evidence.ref))
+    const evidenceText = reasoningEvidence
       .map((evidence) => evidence.text)
       .join("\n");
     const sourceBasis = hasNarration && hasVisual ? "NARRATION_AND_VISUAL" : hasNarration ? "NARRATION" : "VISUAL";
