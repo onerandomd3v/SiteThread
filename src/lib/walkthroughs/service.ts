@@ -122,7 +122,8 @@ export async function getWalkthroughStatus(walkthroughId: string, database: type
   const asset = record.mediaAssets.find((item) => item.kind === MediaAssetKind.SOURCE_VIDEO);
   const run = record.processingRuns.find((item) => item.pipelineVersion === PIPELINE_VERSION);
   if (!asset) throw new SiteThreadError("The upload record is incomplete.", "INTERNAL_ERROR");
-  return { walkthrough: { id: record.id, title: record.title, project: record.project }, asset: { id: asset.id, status: asset.status, mimeType: asset.mimeType, byteSize: asset.byteSize }, run: run ? publicRun(run) : null };
+  const report = run ? await database.report.findFirst({ where: { walkthroughId, observations: { some: { observation: { processingRunId: run.id } } } }, select: { id: true }, orderBy: { generatedAt: "desc" } }) : null;
+  return { walkthrough: { id: record.id, title: record.title, project: record.project }, asset: { id: asset.id, status: asset.status, mimeType: asset.mimeType, byteSize: asset.byteSize }, run: run ? publicRun(run) : null, report };
 }
 
 export async function retryWalkthrough(walkthroughId: string, database: typeof db = db) {

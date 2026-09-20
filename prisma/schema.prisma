@@ -247,31 +247,40 @@ model ObservationEvidence {
 }
 
 model Report {
-  id            String              @id @default(cuid())
-  walkthroughId String
-  generatedBy   String?
-  generatedAt   DateTime            @default(now())
-  createdAt     DateTime            @default(now())
-  walkthrough   Walkthrough         @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
-  observations  ReportObservation[]
+  id                    String              @id @default(cuid())
+  walkthroughId         String
+  projectName           String
+  walkthroughTitle      String?
+  walkthroughCapturedAt DateTime?
+  walkthroughCreatedAt  DateTime
+  walkthroughDurationSeconds Float?
+  generatedBy           String?
+  generatedAt           DateTime            @default(now())
+  createdAt             DateTime            @default(now())
+  walkthrough           Walkthrough         @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
+  observations          ReportObservation[]
 
   @@index([walkthroughId, generatedAt])
 }
 
 model ReportObservation {
-  id            String          @id @default(cuid())
-  reportId      String
-  observationId String
-  text          String
-  type          ObservationType
-  reviewState   ReviewState
-  reviewerId    String?
-  reviewedAt    DateTime?
-  sortOrder     Int
-  createdAt     DateTime        @default(now())
-  report        Report          @relation(fields: [reportId], references: [id], onDelete: Cascade)
-  observation   Observation     @relation(fields: [observationId], references: [id], onDelete: Restrict)
-  evidence      ReportObservationEvidence[]
+  id              String                 @id @default(cuid())
+  reportId        String
+  observationId   String
+  text            String
+  type            ObservationType
+  sourceBasis     ObservationSourceBasis
+  suggestedAction String?
+  location        String?
+  trade           String?
+  reviewState     ReviewState
+  reviewerId      String?
+  reviewedAt      DateTime?
+  sortOrder       Int
+  createdAt       DateTime               @default(now())
+  report          Report                 @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  observation     Observation            @relation(fields: [observationId], references: [id], onDelete: Restrict)
+  evidence        ReportObservationEvidence[]
 
   @@unique([reportId, observationId])
   @@index([reportId, sortOrder])
@@ -287,6 +296,7 @@ model ReportObservationEvidence {
   sourceStartSeconds  Float?
   sourceEndSeconds    Float?
   label               String?
+  transcriptText      String?
   createdAt           DateTime         @default(now())
   reportObservation  ReportObservation @relation(fields: [reportObservationId], references: [id], onDelete: Cascade)
 

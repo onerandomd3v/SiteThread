@@ -104,7 +104,7 @@ export function FindingReviewPanel({
           const isSaving = savingId === observation.observationId;
           const isDraft = observation.reviewState === "DRAFT";
           return (
-            <article key={observation.observationId} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" data-testid={`finding-${observation.observationId}`}>
+            <article id={`finding-${observation.observationId}`} key={observation.observationId} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" data-testid={`finding-${observation.observationId}`}>
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{typeLabel(observation.type)}</p>
@@ -130,7 +130,7 @@ export function FindingReviewPanel({
 
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold text-slate-900">Evidence</h3>
-                {observation.evidence.map((item) => <div key={item.evidenceId} className="space-y-2 rounded-xl border border-slate-200 p-3">
+                {observation.evidence.map((item) => <div id={`finding-${observation.observationId}-evidence-${item.evidenceId}`} key={item.evidenceId} className="space-y-2 rounded-xl border border-slate-200 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
                     <span className="font-semibold">{item.label ?? (item.kind === "TRANSCRIPT" ? "Narration" : "Visual evidence")}</span>
                     <span>{timeLabel(item.sourceStartSeconds)}–{timeLabel(item.sourceEndSeconds)}</span>
