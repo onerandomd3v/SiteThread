@@ -39,11 +39,14 @@ export async function extractObservations(
   ]);
   const context = buildReasoningContext({ transcriptSegments, visualCandidates });
   const reasoner = dependencies.reasoner ?? configuredObservationReasoner();
-  const idempotencyKey = createHash("sha256").update(`${run.id}|${run.pipelineVersion}|${OBSERVATION_REASONING_VERSION}|${context.evidenceFingerprint}|${run.retryCount}`).digest("hex");
+  const idempotencyKey = createHash("sha256").update(`${run.id}|${run.pipelineVersion}|${OBSERVATION_REASONING_VERSION}|${context.evidenceFingerprint}`).digest("hex");
   const result = await reasoner.extract({
     idempotencyKey,
     evidence: context.evidence,
   });
+  if (result.diagnostic.idempotencyKey !== idempotencyKey) {
+    throw new SiteThreadError("The observation reasoner returned a mismatched idempotency key.", "PROVIDER_RESULT_INVALID");
+  }
   const grounded = groundReasonedObservations(result.value, context);
   const range = invocationRange(context);
   const diagnostic: ProviderDiagnostic = result.diagnostic;
@@ -53,10 +56,10 @@ export async function extractObservations(
     if (!current || current.status !== "EXTRACTING_OBSERVATIONS") return;
     const rawResponse = sanitizeProviderResponse(diagnostic.rawResponse) as Prisma.InputJsonValue;
     await transaction.providerInvocation.upsert({
-      where: { idempotencyKey: diagnostic.idempotencyKey },
+      where: { idempotencyKey },
       create: {
         processingRunId: runId,
-        idempotencyKey: diagnostic.idempotencyKey,
+        idempotencyKey,
         provider: diagnostic.provider,
         capability: diagnostic.capability,
         stage: "EXTRACTING_OBSERVATIONS",

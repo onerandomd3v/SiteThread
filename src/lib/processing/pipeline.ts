@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MediaAssetKind, MediaAssetStatus, Prisma } from "@prisma/client";
+import { MediaAssetKind, MediaAssetStatus, Prisma, type ProcessingStatus } from "@prisma/client";
 import { db } from "@/lib/db/client";
 import { SiteThreadError, serializeError } from "@/lib/errors";
 import type { MediaIntelligenceProvider, ProviderDiagnostic } from "@/lib/livepeer/types";
@@ -14,7 +14,7 @@ import type { ProcessingMediaStorage } from "@/lib/storage/types";
 import { extractObservations } from "@/lib/reasoning/extract";
 import type { ObservationReasoner } from "@/lib/reasoning/types";
 import { providerEventSourceRange, audioWindows, visualClips, type SourceRange } from "./selection";
-import { transitionProcessingRun } from "./lifecycle";
+import { failProcessingRunIfCurrent, transitionProcessingRun } from "./lifecycle";
 
 const SIGNED_READ_SECONDS = 15 * 60;
 
@@ -67,7 +67,7 @@ export async function processWalkthrough(
       return;
     } catch (error) {
       const safe = serializeError(error);
-      await transitionProcessingRun(runId, "PROCESSING_FAILED", { failedStep: "EXTRACTING_OBSERVATIONS", errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
+      await failProcessingRunIfCurrent(runId, "EXTRACTING_OBSERVATIONS", { failedStep: "EXTRACTING_OBSERVATIONS", errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
       throw new SiteThreadError(safe.message, safe.code, safe.retryable);
     }
   }
@@ -81,7 +81,7 @@ export async function processWalkthrough(
   }
   const source = run.walkthrough.mediaAssets.find((asset) => asset.kind === MediaAssetKind.SOURCE_VIDEO && asset.status === MediaAssetStatus.AVAILABLE);
   let directory: string | undefined;
-  let stage = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
+  let stage: ProcessingStatus = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
   try {
     if (!source) throw new SiteThreadError("The private source walkthrough is unavailable.", "MEDIA_UNAVAILABLE");
     const provider = dependencies.provider ?? configuredMediaProvider();
@@ -180,7 +180,7 @@ export async function processWalkthrough(
     await extractObservations(runId, { database, reasoner: dependencies.reasoner });
   } catch (error) {
     const safe = serializeError(error);
-    await transitionProcessingRun(runId, "PROCESSING_FAILED", { failedStep: stage, errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
+    await failProcessingRunIfCurrent(runId, stage, { failedStep: stage, errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
     throw new SiteThreadError(safe.message, safe.code, safe.retryable);
   } finally {
     if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);

@@ -95,9 +95,11 @@ function normalizedText(value: string): string {
   return value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function normalizedEvidenceText(value: string): string {
+export function normalizeReasoningEvidenceText(value: string): string {
   return sanitizeResultText(value)
     .replace(/<\s*\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*>\s*/g, "")
+    .replace(/\b(?:\d{1,2}:){1,2}\d{2}(?:\.\d+)?\b/g, "")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:milliseconds?|ms|seconds?|secs?|s)\b/gi, "")
     .trim();
 }
 
@@ -114,7 +116,7 @@ function factualTokens(value: string): string[] {
 }
 
 function spatialRelations(value: string): Set<string> {
-  return new Set(factualTokens(value).filter((token) => SPATIAL_RELATIONS.has(token)));
+  return new Set(factualTokens(value).filter((token) => SPATIAL_RELATIONS.has(token)).map((token) => token === "inside" ? "in" : token));
 }
 
 function claimClauses(value: string): string[] {
@@ -129,26 +131,28 @@ function matchesSingleEvidence(clause: string, evidence: ReasoningEvidence): boo
   const claimTokens = factualTokens(clause);
   if (claimTokens.length === 0) return true;
   const evidenceTokens = new Set(factualTokens(evidence.text));
-  const claimContent = claimTokens.filter((token) => !SPATIAL_RELATIONS.has(token));
-  const matchingContent = claimContent.filter((token) => evidenceTokens.has(token));
-  const minimumMatches = claimContent.length <= 2 ? claimContent.length : Math.ceil(claimContent.length * 0.75);
-  if (matchingContent.length < minimumMatches) return false;
+  if (claimTokens.some((token) => !evidenceTokens.has(token))) return false;
   const claimRelations = spatialRelations(clause);
   const evidenceRelations = spatialRelations(evidence.text);
-  if (claimRelations.has("in") && evidenceRelations.has("beside")) return false;
-  if (claimRelations.has("beside") && evidenceRelations.has("in")) return false;
-  return true;
+  return [...claimRelations].every((relation) => evidenceRelations.has(relation));
+}
+
+function requiredEvidenceKind(clause: string): ReasoningEvidence["kind"] | undefined {
+  if (/\b(?:visible|seen|shown|appears|looks?)\b/i.test(clause)) return "visual";
+  if (/\b(?:reported|said|mentioned|narrated)\b/i.test(clause)) return "transcript";
+  return undefined;
 }
 
 function isDescriptionGrounded(description: string, resolved: Array<ReasoningEvidence>): boolean {
   if (UNSUPPORTED_CLAIM.test(description) || UNSUPPORTED_REMEDIATION.test(description)) return false;
-  const hasVisual = resolved.some((evidence) => evidence.kind === "visual");
-  const hasNarration = resolved.some((evidence) => evidence.kind === "transcript");
-  if (/\b(?:visible|seen|shown|appears|looks?)\b/i.test(description) && !hasVisual) return false;
-  if (/\b(?:reported|said|mentioned|narrated)\b/i.test(description) && !hasNarration) return false;
   const clauses = claimClauses(description);
-  return clauses.every((clause) => resolved.some((evidence) => matchesSingleEvidence(clause, evidence)))
-    && resolved.every((evidence) => clauses.some((clause) => matchesSingleEvidence(clause, evidence)));
+  return clauses.every((clause) => {
+    const requiredKind = requiredEvidenceKind(clause);
+    return resolved.some((evidence) => (!requiredKind || evidence.kind === requiredKind) && matchesSingleEvidence(clause, evidence));
+  }) && resolved.every((evidence) => clauses.some((clause) => {
+    const requiredKind = requiredEvidenceKind(clause);
+    return (!requiredKind || evidence.kind === requiredKind) && matchesSingleEvidence(clause, evidence);
+  }));
 }
 
 function isSuggestedActionAllowed(value: string): boolean {
@@ -169,7 +173,7 @@ export function buildReasoningContext(input: {
   const references = new Map<string, DurableEvidence>();
   let transcriptIndex = 0;
   for (const segment of [...input.transcriptSegments].sort((left, right) => left.sequence - right.sequence)) {
-    const text = normalizedEvidenceText(segment.text);
+    const text = normalizeReasoningEvidenceText(segment.text);
     if (!text) continue;
     const ref = `T${transcriptIndex++}`;
     evidence.push({ ref, kind: "transcript", text });
@@ -184,7 +188,7 @@ export function buildReasoningContext(input: {
   }
   let visualIndex = 0;
   for (const candidate of [...input.visualCandidates].sort((left, right) => left.sourceStartSeconds - right.sourceStartSeconds)) {
-    const text = normalizedEvidenceText(candidate.text);
+    const text = normalizeReasoningEvidenceText(candidate.text);
     if (!text) continue;
     const ref = `V${visualIndex++}`;
     const range = sourceRange(candidate);

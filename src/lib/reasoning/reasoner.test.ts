@@ -31,11 +31,10 @@ function liveReasoner(responseText: string, capture: string[]) {
 describe("observation reasoner", () => {
   it("uses a deterministic fixture without making a network request", async () => {
     const result = await new FixtureObservationReasoner().extract(input);
-    expect(result.value.observations).toEqual([{
-      type: "note",
-      description: "The supervisor reports water at the north doorway.",
-      evidenceRefs: ["T0", "V0"],
-    }]);
+    expect(result.value.observations).toEqual([
+      { type: "note", description: "The supervisor reports water at the north doorway.", evidenceRefs: ["T0"] },
+      { type: "note", description: "Water is visible beside the north doorway.", evidenceRefs: ["V0"] },
+    ]);
     expect(result.diagnostic.provider).toBe("fixture");
   });
 
@@ -53,8 +52,21 @@ describe("observation reasoner", () => {
     expect(JSON.stringify(args)).not.toContain("walk-1");
     expect(JSON.stringify(args)).not.toContain("source-asset");
     expect(JSON.stringify(args)).not.toContain("00:00");
+    expect(JSON.stringify(args)).not.toContain("00:06");
     expect(JSON.stringify(args)).toContain("T0");
     expect(JSON.stringify(args)).toContain("V0");
+  });
+
+  it("strips timestamp markers from evidence immediately before prompt serialization", async () => {
+    const capture: string[] = [];
+    const reasoner = liveReasoner(JSON.stringify({ observations: [] }), capture);
+    await reasoner.extract({
+      ...input,
+      evidence: [{ ref: "V0", kind: "visual", text: "00:06 Water is visible beside the doorway." }],
+    });
+    const runRequest = capture.map((value) => JSON.parse(value)).find((request) => request.params?.name === "run_capability");
+    expect(JSON.stringify(runRequest.params.arguments)).not.toContain("00:06");
+    expect(JSON.stringify(runRequest.params.arguments)).toContain("Water is visible beside the doorway.");
   });
 
   it("keeps fixture output valid when evidence exceeds the per-observation reference cap", async () => {

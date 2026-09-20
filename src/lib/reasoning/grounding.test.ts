@@ -60,9 +60,9 @@ describe("observation evidence grounding", () => {
   });
 
   it.each([
-    [["T0"], "NARRATION", "Water is reported beside the north doorway and requires professional review."],
+    [["T0"], "NARRATION", "Water is reported at the north doorway and requires professional review."],
     [["V0"], "VISUAL", "Water is visible beside the north doorway."],
-    [["T0", "V0"], "NARRATION_AND_VISUAL", "Water is visible and reported beside the north doorway."],
+    [["T0", "V0"], "NARRATION_AND_VISUAL", "Water is visible beside the north doorway and reported at the north doorway."],
   ] as const)("derives source basis from cited references %j", (evidenceRefs, sourceBasis, description) => {
     const drafts = groundReasonedObservations(output([{
       type: "potential_issue",
@@ -75,7 +75,7 @@ describe("observation evidence grounding", () => {
   it("uses real transcript identity and a validated visual event range", () => {
     const drafts = groundReasonedObservations(output([{
       type: "note",
-      description: "Water is visible and reported beside the north doorway.",
+      description: "Water is visible beside the north doorway and reported at the north doorway.",
       evidenceRefs: ["T0", "V0"],
     }]), context());
     expect(drafts[0].evidence).toEqual([
@@ -110,7 +110,7 @@ describe("observation evidence grounding", () => {
       },
       {
         type: "potential_issue",
-        description: "Water is visible beside the north doorway and requires professional review.",
+        description: "Water is visible beside the north doorway and reported at the north doorway and requires professional review.",
         location: "South tower",
         trade: "Waterproofing",
         evidenceRefs: ["T0", "V0"],
@@ -153,6 +153,27 @@ describe("observation evidence grounding", () => {
       type: "note",
       description: "Water is visible in the north doorway.",
       evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it.each([
+    "Water is visible above the north doorway.",
+    "Damaged water is visible beside the north doorway.",
+  ])("rejects unsupported factual qualifiers: %s", (description) => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description,
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("matches modality wording against the evidence source that supports the clause", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "A crack is visible and reported beside the north doorway.",
+      evidenceRefs: ["T0", "V1"],
     }]), context());
     expect(drafts).toEqual([]);
   });
@@ -212,7 +233,7 @@ describe("observation evidence grounding", () => {
         sourceEndSeconds: 6,
         eventStartSeconds: 0,
         eventEndSeconds: 3,
-        text: "<0.0 - 3.0> Water is visible beside the north doorway.",
+        text: "<0.0 - 3.0> 00:06 Water is visible beside the north doorway.",
       }],
     });
     expect(built.evidence[0].text).toBe("Water is visible beside the north doorway.");

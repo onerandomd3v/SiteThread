@@ -6,6 +6,7 @@ import { ObservationReasoningOutputSchema } from "@/lib/schemas/observation-reas
 import { ProviderCallError, RawMcpTransport, validateLivepeerEndpoint } from "@/lib/livepeer/provider";
 import { sanitizeProviderResponse, sanitizeResultText } from "@/lib/livepeer/sanitize";
 import type { SafeJson } from "@/lib/livepeer/types";
+import { normalizeReasoningEvidenceText } from "./grounding";
 import type { ObservationReasoner, ObservationReasoningInput } from "./types";
 
 const GEMINI_CAPABILITY = "gemini-text";
@@ -43,16 +44,11 @@ function parseReasoningOutput(text: string, raw: unknown) {
 
 export class FixtureObservationReasoner implements ObservationReasoner {
   async extract(input: ObservationReasoningInput) {
-    const observations = [];
-    for (let index = 0; index < input.evidence.length && observations.length < 20; index += 12) {
-      const chunk = input.evidence.slice(index, index + 12);
-      if (chunk.length === 0) continue;
-      observations.push({
+    const observations = input.evidence.slice(0, 20).map((evidence) => ({
         type: "note" as const,
-        description: chunk[0].text,
-        evidenceRefs: chunk.map((evidence) => evidence.ref),
-      });
-    }
+        description: evidence.text,
+        evidenceRefs: [evidence.ref],
+      }));
     return {
       value: ObservationReasoningOutputSchema.parse({ observations }),
       diagnostic: { provider: "fixture", capability: GEMINI_CAPABILITY, idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true } as SafeJson, latencyMs: 0 },
@@ -90,7 +86,7 @@ export class LivepeerObservationReasoner implements ObservationReasoner {
     await this.discover();
     const idempotencyKey = input.idempotencyKey;
     const started = Date.now();
-    const promptEvidence = input.evidence.map(({ ref, kind, text }) => ({ ref, kind, text: sanitizeResultText(text) }));
+    const promptEvidence = input.evidence.map(({ ref, kind, text }) => ({ ref, kind, text: normalizeReasoningEvidenceText(sanitizeResultText(text)) }));
     let raw: unknown;
     try {
       raw = await this.transport.request("tools/call", {

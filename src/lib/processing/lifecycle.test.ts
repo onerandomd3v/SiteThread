@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { db } from "@/lib/db/client";
-import { canTransitionProcessingStatus, retryProcessingRun } from "./lifecycle";
+import { canTransitionProcessingStatus, failProcessingRunIfCurrent, retryProcessingRun } from "./lifecycle";
 
 describe("processing lifecycle", () => {
   it("allows the upload and durable queue transitions", () => {
@@ -32,5 +32,14 @@ describe("processing lifecycle", () => {
     await Promise.all([retryProcessingRun("run", database), retryProcessingRun("run", database)]);
     expect(run.retryCount).toBe(1);
     expect(run.status).toBe("QUEUED");
+  });
+
+  it("does not replace a completed extraction with a late failure", async () => {
+    const database = {
+      processingRun: {
+        updateMany: async ({ where }: { where: { id: string; status: string } }) => ({ count: where.status === "EXTRACTING_OBSERVATIONS" ? 0 : 1 }),
+      },
+    } as unknown as typeof db;
+    await expect(failProcessingRunIfCurrent("run", "EXTRACTING_OBSERVATIONS", { failedStep: "EXTRACTING_OBSERVATIONS" }, database)).resolves.toBe(false);
   });
 });

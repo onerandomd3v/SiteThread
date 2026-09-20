@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { db } from "@/lib/db/client";
+import { FixtureObservationReasoner } from "./reasoner";
 import type { ObservationReasoner } from "./types";
 import { extractObservations } from "./extract";
 
@@ -32,7 +33,7 @@ function scenario() {
       reasonerInputs.push(input);
       return {
       value: { observations: [{ type: "potential_issue", description: "Water is visible and reported at the doorway.", suggestedAction: "Ask the site supervisor to review the visible condition.", evidenceRefs: ["T0", "V0"] }] },
-      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "reasoning-key", rawResponse: { fixture: true }, latencyMs: 0 },
+      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 },
       };
     },
   };
@@ -71,7 +72,7 @@ describe("observation extraction persistence", () => {
 
   it("does not persist when the reasoner returns an unknown evidence reference", async () => {
     const state = scenario();
-    state.reasoner.extract = async () => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "bad-key", rawResponse: {}, latencyMs: 0 } });
+    state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
     await expect(extractObservations("run-1", { database: state.database, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
     expect(state.created).toHaveLength(0);
     expect(state.run.status).toBe("EXTRACTING_OBSERVATIONS");
@@ -79,13 +80,25 @@ describe("observation extraction persistence", () => {
 
   it("persists no unsupported drafts but still reaches review", async () => {
     const state = scenario();
-    state.reasoner.extract = async () => ({
+    state.reasoner.extract = async (input) => ({
       value: { observations: [{ type: "potential_issue", description: "A structural crack is visible in the beam.", evidenceRefs: ["V0"] }] },
-      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "safe-key", rawResponse: {}, latencyMs: 0 },
+      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 },
     });
     await extractObservations("run-1", { database: state.database, reasoner: state.reasoner });
     expect(state.created).toHaveLength(0);
     expect(state.run.status).toBe("NEEDS_REVIEW");
+  });
+
+  it("rejects a reasoner diagnostic that changes the caller-derived idempotency key", async () => {
+    const state = scenario();
+    state.reasoner.extract = async () => ({
+      value: { observations: [] },
+      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "wrong-key", rawResponse: {}, latencyMs: 0 },
+    });
+    await expect(extractObservations("run-1", { database: state.database, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
+    expect(state.invocations).toHaveLength(0);
+    expect(state.created).toHaveLength(0);
+    expect(state.run.status).toBe("EXTRACTING_OBSERVATIONS");
   });
 
   it("is a no-op after the run has reached review", async () => {
@@ -102,5 +115,28 @@ describe("observation extraction persistence", () => {
     await extractObservations("run-1", { database: state.database, reasoner: state.reasoner });
     expect(state.created).toHaveLength(1);
     expect(state.created[0]).toMatchObject({ processingRunId: "run-1", sequence: 0, reviewState: "DRAFT" });
+    expect(state.reasonerInputs[1]).toMatchObject({ idempotencyKey: (state.reasonerInputs[0] as { idempotencyKey: string }).idempotencyKey });
+  });
+
+  it("persists individually grounded fixture observations beyond the 12-reference cap", async () => {
+    const state = scenario();
+    const mockDatabase = state.database as unknown as {
+      transcriptSegment: { findMany: () => Promise<unknown[]> };
+      visualCandidate: { findMany: () => Promise<unknown[]> };
+    };
+    mockDatabase.transcriptSegment.findMany = async () => [];
+    mockDatabase.visualCandidate.findMany = async () => Array.from({ length: 13 }, (_, index) => ({
+      id: `visual-${index}`,
+      mediaAssetId: `clip-${index}`,
+      sourceStartSeconds: index,
+      sourceEndSeconds: index + 1,
+      eventStartSeconds: index,
+      eventEndSeconds: index + 1,
+      text: `Condition ${index} is visible.`,
+    }));
+    await extractObservations("run-1", { database: state.database, reasoner: new FixtureObservationReasoner() });
+    expect(state.created).toHaveLength(13);
+    expect(state.created.every((observation) => (observation.evidence as { create: unknown[] }).create.length === 1)).toBe(true);
+    expect(state.run.status).toBe("NEEDS_REVIEW");
   });
 });

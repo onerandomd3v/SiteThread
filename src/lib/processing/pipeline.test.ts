@@ -27,7 +27,7 @@ function scenario(failVisualOnce = false) {
         transitions.push(run.status);
         return { ...run };
       },
-      updateMany: async ({ where, data }: { where: { status: string }; data: Record<string, unknown> }) => {
+      updateMany: async ({ where, data }: { where: { id?: string; status: string }; data: Record<string, unknown> }) => {
         if (run.status !== where.status) return { count: 0 };
         if (data.retryCount && typeof data.retryCount === "object") run.retryCount += 1;
         Object.assign(run, { ...data, retryCount: run.retryCount });
@@ -96,7 +96,7 @@ function scenario(failVisualOnce = false) {
     },
   };
   const reasoner: ObservationReasoner = {
-    extract: async () => ({ value: { observations: [] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "reasoning-key", rawResponse: { fixture: true }, latencyMs: 0 } }),
+    extract: async (input) => ({ value: { observations: [] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }),
   };
   return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get visualCalls() { return visualCalls; } };
 }
@@ -153,7 +153,7 @@ describe("COD-17 processing pipeline", () => {
   it("marks an extraction failure at EXTRACTING_OBSERVATIONS without redoing media work", async () => {
     const state = scenario();
     state.run.status = "EXTRACTING_OBSERVATIONS";
-    state.reasoner.extract = async () => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "bad-key", rawResponse: {}, latencyMs: 0 } });
+    state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
     await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
     expect(state.run.status).toBe("PROCESSING_FAILED");
     expect(state.run.failedStep).toBe("EXTRACTING_OBSERVATIONS");
