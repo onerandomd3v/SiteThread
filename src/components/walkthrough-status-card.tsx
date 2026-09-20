@@ -29,7 +29,7 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
     const body = await response.json() as StatusResponse & { error?: { message?: string } };
     if (!response.ok) throw new Error(body.error?.message ?? "The walkthrough status could not be loaded.");
     setStatus(body);
-    if (body.run && ["NEEDS_REVIEW", "REVIEWED"].includes(body.run.status)) {
+    if (body.run && ["NEEDS_REVIEW", "REVIEWED", "REPORT_READY"].includes(body.run.status)) {
       const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
       const reviewPayload = await reviewResponse.json() as unknown;
       if (!reviewResponse.ok) {
@@ -106,7 +106,7 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
       .then(async (body) => {
         if (cancelled) return;
         setStatus(body);
-        if (body.run && ["NEEDS_REVIEW", "REVIEWED"].includes(body.run.status)) {
+        if (body.run && ["NEEDS_REVIEW", "REVIEWED", "REPORT_READY"].includes(body.run.status)) {
           const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
           const reviewPayload = await reviewResponse.json() as unknown;
           if (!reviewResponse.ok) {
@@ -133,6 +133,8 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
     return () => { cancelled = true; };
   }, [walkthroughId]);
 
+  const reportReady = status?.run?.status === "REPORT_READY" || review?.runStatus === "REPORT_READY";
+
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-6 py-12">
       <Link href="/" className="text-sm font-semibold text-slate-600 underline">← Back to upload</Link>
@@ -154,8 +156,8 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
           <button type="button" disabled={retrying} onClick={() => void retry()} className="ml-3 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{retrying ? "Retrying…" : "Retry processing"}</button>
         </>}
       </section>}
-      {review && status?.run && ["NEEDS_REVIEW", "REVIEWED"].includes(status.run.status) && <FindingReviewPanel review={review} onReview={reviewObservation} />}
-      {review && status?.run?.status === "REVIEWED" && review.remainingDrafts === 0 && (
+      {review && status?.run && ["NEEDS_REVIEW", "REVIEWED", "REPORT_READY"].includes(status.run.status) && <FindingReviewPanel review={review} readOnly={reportReady} onReview={reviewObservation} />}
+      {review && status?.run?.status === "REVIEWED" && review.runStatus === "REVIEWED" && !reportReady && review.remainingDrafts === 0 && (
         review.observations.some((observation) => observation.reviewState === "CONFIRMED" || observation.reviewState === "EDITED")
           ? <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5"><p className="text-sm text-emerald-900">The review is complete. Generate a reviewed site record from the selected findings.</p><button type="button" disabled={generatingReport} onClick={() => void generateReport()} className="mt-3 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{generatingReport ? "Generating report…" : "Generate report"}</button></section>
           : <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">No findings selected for report.</p>

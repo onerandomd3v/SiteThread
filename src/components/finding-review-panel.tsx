@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReviewObservation, WalkthroughReview } from "@/lib/schemas/review";
 
 function timeLabel(value: number | null): string {
@@ -48,15 +48,23 @@ function EvidenceMedia({ url, startSeconds, mediaKind }: { url: string; startSec
 
 export function FindingReviewPanel({
   review,
+  readOnly = false,
   onReview,
 }: {
   review: WalkthroughReview;
+  readOnly?: boolean;
   onReview: (observationId: string, decision: { state: "CONFIRMED" | "DISMISSED" } | { state: "EDITED"; editedText: string }) => Promise<void>;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editedText, setEditedText] = useState("");
   const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.location.hash) return;
+    const target = document.getElementById(window.location.hash.slice(1));
+    target?.scrollIntoView({ block: "center" });
+  }, [review]);
 
   function beginEdit(observation: ReviewObservation) {
     setEditingId(observation.observationId);
@@ -96,13 +104,13 @@ export function FindingReviewPanel({
       {error && <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
 
       {review.totalCount === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">No valid findings were extracted from this walkthrough. Review is complete without adding unsupported observations.</div>}
-      {review.complete && review.totalCount > 0 && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">Review complete — report preparation is the next step.</div>}
+      {review.complete && review.totalCount > 0 && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{readOnly ? "Review complete — this walkthrough has a reviewed site record." : "Review complete — report preparation is the next step."}</div>}
 
       <div className="space-y-4">
         {review.observations.map((observation) => {
           const isEditing = editingId === observation.observationId;
           const isSaving = savingId === observation.observationId;
-          const isDraft = observation.reviewState === "DRAFT";
+          const isDraft = !readOnly && observation.reviewState === "DRAFT";
           return (
             <article id={`finding-${observation.observationId}`} key={observation.observationId} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" data-testid={`finding-${observation.observationId}`}>
               <div className="flex items-start justify-between gap-4">

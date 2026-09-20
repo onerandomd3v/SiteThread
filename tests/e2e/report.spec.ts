@@ -22,8 +22,8 @@ const report = {
   project: { id: "project-1", name: "North site" },
   walkthrough: { id: "walk-1", title: "Morning walk", capturedAt: null, createdAt: "2026-09-20T09:00:00.000Z", durationSeconds: 30 },
   findings: [
-    { reportObservationId: "report-observation-1", sourceObservationId: "confirmed-1", type: "PROGRESS", sourceBasis: "NARRATION", text: "The flooring is installed.", suggestedAction: null, location: "Level 1", trade: "Flooring", reviewState: "CONFIRMED", reviewerId: "mvp-reviewer", reviewedAt: "2026-09-20T10:00:00.000Z", evidence: [{ reportEvidenceId: "report-evidence-1", sourceWalkthroughId: "walk-1", sourceEvidenceId: "evidence-confirmed", mediaAssetId: null, transcriptSegmentId: "segment-1", sourceStartSeconds: 1, sourceEndSeconds: 2, label: "Narration", transcriptText: "Reviewed source", frameUrl: null, mediaAvailability: "NOT_APPLICABLE", applicationUrl: "/walkthroughs/walk-1" }] },
-    { reportObservationId: "report-observation-2", sourceObservationId: "edited-1", type: "ACTION", sourceBasis: "NARRATION", text: "Ask the site supervisor to review the doorway.", suggestedAction: null, location: "North doorway", trade: null, reviewState: "EDITED", reviewerId: "mvp-reviewer", reviewedAt: "2026-09-20T10:01:00.000Z", evidence: [{ reportEvidenceId: "report-evidence-2", sourceWalkthroughId: "walk-1", sourceEvidenceId: "evidence-edited", mediaAssetId: null, transcriptSegmentId: "segment-1", sourceStartSeconds: 1, sourceEndSeconds: 2, label: "Narration", transcriptText: "Reviewed source", frameUrl: null, mediaAvailability: "NOT_APPLICABLE", applicationUrl: "/walkthroughs/walk-1" }] },
+    { reportObservationId: "report-observation-1", sourceObservationId: "confirmed-1", type: "PROGRESS", sourceBasis: "NARRATION", text: "The flooring is installed.", suggestedAction: null, location: "Level 1", trade: "Flooring", reviewState: "CONFIRMED", reviewerId: "mvp-reviewer", reviewedAt: "2026-09-20T10:00:00.000Z", evidence: [{ reportEvidenceId: "report-evidence-1", sourceWalkthroughId: "walk-1", sourceEvidenceId: "evidence-confirmed", mediaAssetId: null, transcriptSegmentId: "segment-1", sourceStartSeconds: 1, sourceEndSeconds: 2, label: "Narration", transcriptText: "Reviewed source", frameUrl: null, mediaAvailability: "NOT_APPLICABLE", applicationUrl: "/walkthroughs/walk-1#finding-confirmed-1-evidence-evidence-confirmed" }] },
+    { reportObservationId: "report-observation-2", sourceObservationId: "edited-1", type: "ACTION", sourceBasis: "NARRATION", text: "Ask the site supervisor to review the doorway.", suggestedAction: null, location: "North doorway", trade: null, reviewState: "EDITED", reviewerId: "mvp-reviewer", reviewedAt: "2026-09-20T10:01:00.000Z", evidence: [{ reportEvidenceId: "report-evidence-2", sourceWalkthroughId: "walk-1", sourceEvidenceId: "evidence-edited", mediaAssetId: null, transcriptSegmentId: "segment-1", sourceStartSeconds: 1, sourceEndSeconds: 2, label: "Narration", transcriptText: "Reviewed source", frameUrl: null, mediaAvailability: "NOT_APPLICABLE", applicationUrl: "/walkthroughs/walk-1#finding-edited-1-evidence-evidence-edited" }] },
   ],
 };
 
@@ -32,29 +32,48 @@ test("completed review exposes a working report-generation action", async ({ pag
   await page.route("**/api/walkthroughs/walk-1/status", (route) => route.fulfill({ json: { walkthrough: { id: "walk-1", title: "Morning walk", project: { id: "project-1", name: "North site" } }, asset: { id: "asset-1", status: "AVAILABLE", mimeType: "video/mp4", byteSize: 100 }, run: { status: "REVIEWED", retryCount: 0, failedStep: null, errorMessage: null, retryable: null }, report: null } }));
   await page.route("**/api/walkthroughs/walk-1/observations", (route) => route.fulfill({ json: review }));
   await page.route("**/api/walkthroughs/walk-1/report", async (route) => { reportRequests += 1; await route.fulfill({ json: report }); });
-  await page.addInitScript(() => {
-    const pushState = history.pushState.bind(history);
-    const replaceState = history.replaceState.bind(history);
-    const captureReportNavigation = (url: string | URL | null | undefined): boolean => {
-      if (typeof url === "string" && url.includes("/reports/")) {
-        window.name = url;
-        return true;
-      }
-      return false;
-    };
-    history.pushState = (state, title, url) => {
-      if (captureReportNavigation(url)) return;
-      pushState(state, title, url);
-    };
-    history.replaceState = (state, title, url) => {
-      if (captureReportNavigation(url)) return;
-      replaceState(state, title, url);
-    };
-  });
 
   await page.goto("/walkthroughs/walk-1");
   await expect(page.getByRole("button", { name: "Generate report" })).toBeVisible();
   await page.getByRole("button", { name: "Generate report" }).click();
   await expect.poll(() => reportRequests).toBe(1);
-  await expect.poll(() => page.evaluate(() => window.name)).toContain("/reports/report-1");
+});
+
+test("report evidence returns to a REPORT_READY walkthrough as read-only anchored evidence", async ({ page }) => {
+  let reportRequests = 0;
+  await page.route("**/api/walkthroughs/walk-1/status", (route) => route.fulfill({ json: {
+    walkthrough: { id: "walk-1", title: "Morning walk", project: { id: "project-1", name: "North site" } },
+    asset: { id: "asset-1", status: "AVAILABLE", mimeType: "video/mp4", byteSize: 100 },
+    run: { status: reportRequests > 0 ? "REPORT_READY" : "REVIEWED", retryCount: 0, failedStep: null, errorMessage: null, retryable: null },
+    report: reportRequests > 0 ? { id: "report-1" } : null,
+  } }));
+  await page.route("**/api/walkthroughs/walk-1/observations", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await route.fulfill({ json: { ...review, runStatus: reportRequests > 0 ? "REPORT_READY" : "REVIEWED" } });
+  });
+  await page.route("**/api/walkthroughs/walk-1/report", async (route) => {
+    reportRequests += 1;
+    await route.fulfill({ json: report });
+  });
+  await page.route("**/reports/report-1*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: '<main><h1>Reviewed site record</h1><a href="/walkthroughs/walk-1#finding-confirmed-1-evidence-evidence-confirmed">Open source evidence</a></main>',
+  }));
+
+  await page.goto("/walkthroughs/walk-1");
+  await expect(page.getByRole("button", { name: "Generate report" })).toBeVisible();
+  await page.getByRole("button", { name: "Generate report" }).click();
+  await expect.poll(() => reportRequests).toBe(1);
+
+  await page.goto("/reports/report-1");
+  await page.getByRole("link", { name: "Open source evidence" }).click();
+  await expect(page).toHaveURL(/\/walkthroughs\/walk-1#finding-confirmed-1-evidence-evidence-confirmed$/);
+  await expect(page.locator("#finding-confirmed-1-evidence-evidence-confirmed")).toBeVisible();
+  await expect(page.getByRole("link", { name: "View report" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Generate report" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Confirm", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => Boolean(document.getElementById("finding-confirmed-1-evidence-evidence-confirmed")))).toBe(true);
 });
