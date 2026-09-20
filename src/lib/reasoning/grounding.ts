@@ -64,14 +64,23 @@ const TYPE_MAP = {
 const UNSUPPORTED_CLAIM = /\b(?:structur(?:al|ally)|load[- ]bearing|beam|foundation|building\s+code|code\s+(?:violation|compliant|noncompliant)|violates?\s+(?:the\s+)?(?:building\s+)?code|(?:passed|failed)\s+inspection|inspection\s+(?:approved|rejected)|engineer(?:ing)?\s+(?:approved|accepted|certified)|(?:approved|accepted|certified|compliant|compliance|signed\s+off)|certified\s+(?:safe|compliant)|\b(?:safe|unsafe|dangerous|hazardous)\b|(?:clear|okay)\s+to\s+enter|fit\s+for\s+occupancy|(?:payment|financially|cost|budget)\s+(?:due|entitled)|entitlement|\$\s*\d|\d+(?:\.\d+)?\s*(?:%|percent|percentage)|caused?\s+by|due\s+to|because|result(?:ed|ing)?\s+(?:from|in)|leads?\s+to|led\s+to|therefore)\b/i;
 const UNSUPPORTED_REMEDIATION = /\b(?:repair|replace|fix|seal|remove|clean|rework|correct|demolish|secure|patch)\b/i;
 const REVIEW_ACTION = /^\s*(?:ask|have|request|refer|flag|invite)\s+(?:the\s+)?(?:site\s+)?(?:supervisor|professional|reviewer|team)\s+(?:to\s+)?(?:review|follow[- ]?up|inspect|assess|check)\s+(?:the\s+)?(?:visible\s+)?(?:condition|finding|observation|area)\.?\s*$/i;
+const REVIEW_CONTEXT = /\b(?:ask|asks|asked|request|requests|requested|recommend|recommends|recommended)\b.*\b(?:review|follow[- ]?up)\b/i;
 const SPATIAL_RELATIONS = new Set(["above", "at", "behind", "beside", "between", "by", "in", "inside", "near", "on", "under"]);
 const NEGATION_MARKER = /\b(?:no|not|never|without|isn't|is\s+not|aren't|are\s+not|wasn't|was\s+not|weren't|were\s+not|doesn't|does\s+not|cannot|can't)\b/gi;
-const PREDICATE_WORDS = new Set(["am", "are", "appeared", "appears", "be", "been", "being", "blocks", "covers", "has", "have", "is", "leaking", "lies", "looks", "looked", "pooled", "reported", "reports", "rests", "said", "seen", "shows", "shown", "visible", "was", "were"]);
+const PREDICATE_WORDS = new Set(["am", "are", "appeared", "appears", "asks", "be", "been", "being", "blocks", "contains", "contain", "covers", "had", "has", "have", "is", "leaking", "lies", "looks", "looked", "mentioned", "mentions", "mentioning", "narrated", "narrates", "narrating", "pooled", "reported", "reports", "reporting", "rests", "said", "says", "saying", "seen", "shows", "shown", "visible", "was", "were"]);
 const ROLE_PREDICATES = new Set(["appeared", "appears", "blocks", "covers", "leaking", "lies", "looks", "looked", "pooled", "rests", "seen", "shows", "shown", "visible"]);
-const NEGATIVE_PREDICATES = new Set([...ROLE_PREDICATES, "reported", "reports", "said"]);
+const ROLE_FRAME_PREDICATES = new Map<string, "reporting" | "possession">([
+  ["report", "reporting"], ["reported", "reporting"], ["reports", "reporting"], ["reporting", "reporting"],
+  ["say", "reporting"], ["said", "reporting"], ["says", "reporting"], ["saying", "reporting"],
+  ["mention", "reporting"], ["mentioned", "reporting"], ["mentions", "reporting"], ["mentioning", "reporting"],
+  ["narrate", "reporting"], ["narrated", "reporting"], ["narrates", "reporting"], ["narrating", "reporting"],
+  ["has", "possession"], ["have", "possession"], ["had", "possession"], ["contain", "possession"], ["contains", "possession"],
+] as const);
+const ROLE_FRAME_WORDS: Set<string> = new Set(ROLE_FRAME_PREDICATES.keys());
+const NEGATIVE_PREDICATES = new Set([...ROLE_PREDICATES, ...ROLE_FRAME_WORDS]);
 const NEGATION_WORDS = new Set(["no", "not", "never", "without", "isnt", "arent", "wasnt", "werent", "doesnt", "cannot", "cant"]);
 const STOP_WORDS = new Set([
-  "a", "an", "and", "are", "as", "be", "for", "from", "is", "it", "of", "or", "reported", "reports", "the", "to", "was", "were", "with",
+  "a", "an", "and", "are", "as", "be", "been", "being", "for", "from", "is", "it", "of", "or", "reported", "reports", "the", "to", "was", "were", "with",
 ]);
 
 function sourceRange(source: VisualEvidenceSource): { startSeconds: number; endSeconds: number } {
@@ -117,7 +126,7 @@ function stemToken(value: string): string {
 }
 
 function factualTokens(value: string): string[] {
-  return normalizedText(value).split(" ").filter((token) => token && !STOP_WORDS.has(token) && !NEGATION_WORDS.has(token)).map(stemToken);
+  return normalizedText(value).split(" ").filter((token) => token && !STOP_WORDS.has(token) && !NEGATION_WORDS.has(token) && !ROLE_FRAME_WORDS.has(token)).map(stemToken);
 }
 
 function spatialRelations(value: string): Set<string> {
@@ -180,6 +189,90 @@ function includesAll(haystack: string[], needles: string[]): boolean {
   return needles.every((needle) => haystack.includes(needle));
 }
 
+type SemanticRoleFrame = {
+  predicate: "reporting" | "possession";
+  voice: "active" | "passive";
+  agent: string[];
+  theme: string[];
+};
+
+const PASSIVE_AUXILIARIES = new Set(["am", "is", "are", "was", "were", "be", "been", "being"]);
+const PASSIVE_PARTICIPLES = new Set(["reported", "said", "mentioned", "narrated"]);
+
+function roleTokens(tokens: string[]): string[] {
+  return tokens
+    .filter((token) => !NEGATION_WORDS.has(token) && !STOP_WORDS.has(token) && !PREDICATE_WORDS.has(token) && !SPATIAL_RELATIONS.has(token))
+    .map(stemToken);
+}
+
+function rolePredicateIndex(tokens: string[]): number {
+  const firstPredicateIndex = tokens.findIndex((token) => ROLE_FRAME_PREDICATES.has(token));
+  const reportingIndex = tokens.findIndex((token) => ROLE_FRAME_PREDICATES.get(token) === "reporting");
+  if (firstPredicateIndex >= 0 && reportingIndex > firstPredicateIndex
+    && tokens.slice(firstPredicateIndex, reportingIndex).some((token) => ["has", "have", "had", "been"].includes(token))) {
+    return reportingIndex;
+  }
+  return firstPredicateIndex;
+}
+
+function semanticRoleFrame(value: string): SemanticRoleFrame | undefined {
+  const tokens = normalizedText(value).split(" ").filter(Boolean);
+  const predicateIndex = rolePredicateIndex(tokens);
+  if (predicateIndex < 0) return undefined;
+  const predicate = ROLE_FRAME_PREDICATES.get(tokens[predicateIndex]);
+  if (!predicate) return undefined;
+  const relationOffset = tokens.slice(predicateIndex + 1).findIndex((token) => token !== "by" && SPATIAL_RELATIONS.has(token));
+  const relationIndex = relationOffset >= 0 ? predicateIndex + 1 + relationOffset : tokens.length;
+  const predicateWord = tokens[predicateIndex];
+  const passive = PASSIVE_PARTICIPLES.has(predicateWord) && predicateIndex > 0 && PASSIVE_AUXILIARIES.has(tokens[predicateIndex - 1]);
+  if (passive) {
+    const theme = roleTokens(tokens.slice(0, predicateIndex - 1));
+    const byIndex = tokens.slice(predicateIndex + 1, relationIndex).findIndex((token) => token === "by");
+    const agent = byIndex >= 0
+      ? roleTokens(tokens.slice(predicateIndex + 2 + byIndex, relationIndex))
+      : [];
+    if (theme.length === 0 || (byIndex >= 0 && agent.length === 0)) return undefined;
+    return { predicate, voice: "passive", agent, theme };
+  }
+  const subject = roleTokens(tokens.slice(0, predicateIndex));
+  const theme = roleTokens(tokens.slice(predicateIndex + 1, relationIndex));
+  if (subject.length === 0 || theme.length === 0) return undefined;
+  return { predicate, voice: "active", agent: subject, theme };
+}
+
+function hasRoleOperands(value: string): boolean {
+  const tokens = normalizedText(value).split(" ").filter(Boolean);
+  const predicateIndex = rolePredicateIndex(tokens);
+  if (predicateIndex < 0) return false;
+  const relationOffset = tokens.slice(predicateIndex + 1).findIndex((token) => token !== "by" && SPATIAL_RELATIONS.has(token));
+  const relationIndex = relationOffset >= 0 ? predicateIndex + 1 + relationOffset : tokens.length;
+  const predicateWord = tokens[predicateIndex];
+  if (PASSIVE_PARTICIPLES.has(predicateWord) && predicateIndex > 0 && PASSIVE_AUXILIARIES.has(tokens[predicateIndex - 1])) {
+    return roleTokens(tokens.slice(0, predicateIndex - 1)).length > 0;
+  }
+  return roleTokens(tokens.slice(0, predicateIndex)).length > 0
+    || roleTokens(tokens.slice(predicateIndex + 1, relationIndex)).length > 0;
+}
+
+function hasRolePredicate(value: string): boolean {
+  return normalizedText(value).split(" ").some((token) => ROLE_FRAME_PREDICATES.has(token));
+}
+
+function semanticRolesMatch(claim: SemanticRoleFrame, evidence: SemanticRoleFrame): boolean {
+  if (claim.predicate !== evidence.predicate) return false;
+  if (claim.voice === "active" && evidence.voice === "active") {
+    return includesAll(evidence.agent, claim.agent) && includesAll(evidence.theme, claim.theme);
+  }
+  if (claim.voice === "passive" && evidence.voice === "passive") {
+    return includesAll(evidence.theme, claim.theme)
+      && (claim.agent.length === 0 || includesAll(evidence.agent, claim.agent));
+  }
+  const active = claim.voice === "active" ? claim : evidence;
+  const passive = claim.voice === "passive" ? claim : evidence;
+  return includesAll(active.theme, passive.theme)
+    && (passive.agent.length === 0 || includesAll(active.agent, passive.agent));
+}
+
 function negativeCondition(value: string): { subject: string[]; relation: string | undefined; location: string[] } | undefined {
   const tokens = normalizedText(value).split(" ").filter(Boolean);
   const negationIndex = tokens.findIndex((token) => NEGATION_WORDS.has(token));
@@ -222,6 +315,11 @@ function matchesEvidenceFragment(clause: string, evidenceText: string): boolean 
   const claimRelations = spatialRelations(clause);
   const evidenceRelations = spatialRelations(evidenceText);
   if (![...claimRelations].every((relation) => evidenceRelations.has(relation))) return false;
+  const claimRoles = semanticRoleFrame(clause);
+  const evidenceRoles = semanticRoleFrame(evidenceText);
+  if (claimRoles && evidenceRoles && !semanticRolesMatch(claimRoles, evidenceRoles)) return false;
+  if (claimRoles && !evidenceRoles && hasRoleOperands(clause)) return false;
+  if (evidenceRoles && !claimRoles && (hasRoleOperands(clause) || !hasRolePredicate(clause))) return false;
   const claimCondition = spatialCondition(clause);
   const evidenceCondition = spatialCondition(evidenceText);
   if (claimCondition && evidenceCondition) {
@@ -240,12 +338,12 @@ function evidenceClauses(value: string): string[] {
 }
 
 function requiredEvidenceKind(clause: string): ReasoningEvidence["kind"] | undefined {
+  if (normalizedText(clause).split(" ").some((token) => ROLE_FRAME_PREDICATES.get(token) === "reporting")) return "transcript";
   if (/\b(?:visible|seen|shown|appears|looks?)\b/i.test(clause)) return "visual";
-  if (/\b(?:reported|said|mentioned|narrated)\b/i.test(clause)) return "transcript";
   return undefined;
 }
 
-function groundedEvidenceFragments(description: string, resolved: Array<ReasoningEvidence>): string[] | undefined {
+function groundedEvidenceFragments(description: string, resolved: Array<ReasoningEvidence>): { description: string[]; trade: string[] } | undefined {
   if (UNSUPPORTED_CLAIM.test(description) || UNSUPPORTED_REMEDIATION.test(description)) return undefined;
   const clauses = splitGroundingClauses(description.replace(/\s+\b(?:and\s+)?(?:requires?|needs?)\s+(?:a\s+)?(?:professional|site\s+supervisor|supervisor)?\s*(?:review|follow[- ]?up)\b/gi, ""));
   const matchedEvidence = new Set<ReasoningEvidence>();
@@ -265,7 +363,11 @@ function groundedEvidenceFragments(description: string, resolved: Array<Reasonin
     }
   }
   if (resolved.some((evidence) => !matchedEvidence.has(evidence))) return undefined;
-  return matchedFragments;
+  const tradeFragments = [...matchedFragments];
+  for (const evidence of matchedEvidence) {
+    tradeFragments.push(...evidenceClauses(evidence.text).filter((fragment) => REVIEW_CONTEXT.test(fragment)));
+  }
+  return { description: matchedFragments, trade: tradeFragments };
 }
 
 function isSuggestedActionAllowed(value: string): boolean {
@@ -340,14 +442,15 @@ export function groundReasonedObservations(
     if (observation.suggestedAction && !isSuggestedActionAllowed(observation.suggestedAction)) return [];
     const hasNarration = resolved.some((evidence) => evidence.kind === "transcript");
     const hasVisual = resolved.some((evidence) => evidence.kind === "visual");
-    const evidenceText = matchedEvidenceFragments.join("\n");
+    const locationEvidenceText = matchedEvidenceFragments.description.join("\n");
+    const tradeEvidenceText = matchedEvidenceFragments.trade.join("\n");
     const sourceBasis = hasNarration && hasVisual ? "NARRATION_AND_VISUAL" : hasNarration ? "NARRATION" : "VISUAL";
     return [{
       type: TYPE_MAP[observation.type],
       sourceBasis,
       description: observation.description,
-      ...(isGroundedOptionalValue(observation.location, evidenceText) ? { location: observation.location } : {}),
-      ...(isGroundedOptionalValue(observation.trade, evidenceText) ? { trade: observation.trade } : {}),
+      ...(isGroundedOptionalValue(observation.location, locationEvidenceText) ? { location: observation.location } : {}),
+      ...(isGroundedOptionalValue(observation.trade, tradeEvidenceText) ? { trade: observation.trade } : {}),
       ...(observation.confidence === undefined ? {} : { confidence: observation.confidence }),
       ...(observation.suggestedAction ? { suggestedAction: observation.suggestedAction } : {}),
       evidence: resolved.map((evidence) => {

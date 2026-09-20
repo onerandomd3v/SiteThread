@@ -254,6 +254,152 @@ describe("observation evidence grounding", () => {
     expect(drafts).toEqual([]);
   });
 
+  it("preserves reporting subject and object roles", () => {
+    const reportingContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "transcript-reporting-roles",
+        sourceAssetId: null,
+        sequence: 0,
+        startSeconds: 0,
+        endSeconds: 2,
+        text: "The supervisor reports water.",
+      }],
+      visualCandidates: [],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "The supervisor reports water.",
+      evidenceRefs: ["T0"],
+    }]), reportingContext)).toHaveLength(1);
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "Water reports the supervisor.",
+      evidenceRefs: ["T0"],
+    }]), reportingContext)).toEqual([]);
+  });
+
+  it("matches reporting tense and safe active-to-passive narration", () => {
+    const reportingContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "transcript-reported-water",
+        sourceAssetId: null,
+        sequence: 0,
+        startSeconds: 0,
+        endSeconds: 2,
+        text: "The supervisor reported water at the doorway.",
+      }],
+      visualCandidates: [],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "The supervisor reports water at the doorway.",
+      evidenceRefs: ["T0"],
+    }]), reportingContext)).toHaveLength(1);
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "Water was reported at the doorway.",
+      evidenceRefs: ["T0"],
+    }]), reportingContext)).toHaveLength(1);
+
+    const perfectContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "transcript-perfect-reported-water",
+        sourceAssetId: null,
+        sequence: 0,
+        startSeconds: 0,
+        endSeconds: 2,
+        text: "The supervisor has reported water at the doorway.",
+      }],
+      visualCandidates: [],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "Water has been reported at the doorway.",
+      evidenceRefs: ["T0"],
+    }]), perfectContext)).toHaveLength(1);
+  });
+
+  it("keeps all reporting forms transcript-bound", () => {
+    const visualContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-reporting-form",
+        mediaAssetId: "clip-reporting-form",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "The supervisor says water.",
+      }],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "The supervisor says water.",
+      evidenceRefs: ["V0"],
+    }]), visualContext)).toEqual([]);
+
+    const visualReportingContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-reporting-visible-form",
+        mediaAssetId: "clip-reporting-visible-form",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "The supervisor reports visible water.",
+      }],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "The supervisor reports visible water.",
+      evidenceRefs: ["V0"],
+    }]), visualReportingContext)).toEqual([]);
+  });
+
+  it("does not turn reported transcript content into an unqualified fact", () => {
+    const reportingContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "transcript-unqualified-report",
+        sourceAssetId: null,
+        sequence: 0,
+        startSeconds: 0,
+        endSeconds: 2,
+        text: "The supervisor reports water at the doorway.",
+      }],
+      visualCandidates: [],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is at the doorway.",
+      evidenceRefs: ["T0"],
+    }]), reportingContext)).toEqual([]);
+  });
+
+  it("preserves narrow possession roles", () => {
+    const possessionContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "transcript-possession-roles",
+        sourceAssetId: null,
+        sequence: 0,
+        startSeconds: 0,
+        endSeconds: 2,
+        text: "The room contains water.",
+      }],
+      visualCandidates: [],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "The room contains water.",
+      evidenceRefs: ["T0"],
+    }]), possessionContext)).toHaveLength(1);
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "Water contains the room.",
+      evidenceRefs: ["T0"],
+    }]), possessionContext)).toEqual([]);
+  });
+
   it("retains a narration-backed negative claim without allowing a safety conclusion", () => {
     const negativeContext = buildReasoningContext({
       transcriptSegments: [{
