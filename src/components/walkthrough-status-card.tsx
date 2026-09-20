@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { FindingReviewPanel } from "@/components/finding-review-panel";
-import type { WalkthroughReview } from "@/lib/schemas/review";
+import { WalkthroughReviewSchema, type WalkthroughReview } from "@/lib/schemas/review";
+import { saveReviewDecision } from "@/lib/observations/review-client";
 
 type StatusResponse = {
   walkthrough: { id: string; title: string | null; project: { id: string; name: string } };
@@ -25,12 +26,20 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
     setStatus(body);
     if (body.run && ["NEEDS_REVIEW", "REVIEWED"].includes(body.run.status)) {
       const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
-      const reviewBody = await reviewResponse.json() as WalkthroughReview & { error?: { message?: string } };
-      if (!reviewResponse.ok) throw new Error(reviewBody.error?.message ?? "The findings could not be loaded.");
+      const reviewPayload = await reviewResponse.json() as unknown;
+      if (!reviewResponse.ok) {
+        const errorBody = reviewPayload as { error?: { message?: string } };
+        throw new Error(errorBody.error?.message ?? "The findings could not be loaded.");
+      }
+      const reviewBody = WalkthroughReviewSchema.parse(reviewPayload);
       if (reviewBody.totalCount === 0 && body.run.status === "NEEDS_REVIEW") {
         const completeResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { method: "POST" });
-        const completeBody = await completeResponse.json() as WalkthroughReview & { error?: { message?: string } };
-        if (!completeResponse.ok) throw new Error(completeBody.error?.message ?? "The empty review could not be completed.");
+        const completePayload = await completeResponse.json() as unknown;
+        if (!completeResponse.ok) {
+          const errorBody = completePayload as { error?: { message?: string } };
+          throw new Error(errorBody.error?.message ?? "The empty review could not be completed.");
+        }
+        const completeBody = WalkthroughReviewSchema.parse(completePayload);
         setReview(completeBody);
         setStatus({ ...body, run: body.run ? { ...body.run, status: "REVIEWED" } : body.run });
       } else setReview(reviewBody);
@@ -57,11 +66,9 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
   }
 
   async function reviewObservation(observationId: string, decision: { state: "CONFIRMED" | "DISMISSED" } | { state: "EDITED"; editedText: string }) {
-    const response = await fetch(`/api/walkthroughs/${walkthroughId}/observations/${observationId}/review`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(decision) });
-    const body = await response.json() as { review?: WalkthroughReview; error?: { message?: string } };
-    if (!response.ok) throw new Error(body.error?.message ?? "The review decision could not be saved.");
-    if (body.review) setReview(body.review);
-    await refresh();
+    const body = await saveReviewDecision(fetch, walkthroughId, observationId, decision);
+    setReview(body.review);
+    setStatus((current) => current?.run ? { ...current, run: { ...current.run, status: body.review.runStatus ?? current.run.status } } : current);
   }
 
   useEffect(() => {
@@ -77,12 +84,20 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
         setStatus(body);
         if (body.run && ["NEEDS_REVIEW", "REVIEWED"].includes(body.run.status)) {
           const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
-          const reviewBody = await reviewResponse.json() as WalkthroughReview & { error?: { message?: string } };
-          if (!reviewResponse.ok) throw new Error(reviewBody.error?.message ?? "The findings could not be loaded.");
+          const reviewPayload = await reviewResponse.json() as unknown;
+          if (!reviewResponse.ok) {
+            const errorBody = reviewPayload as { error?: { message?: string } };
+            throw new Error(errorBody.error?.message ?? "The findings could not be loaded.");
+          }
+          const reviewBody = WalkthroughReviewSchema.parse(reviewPayload);
           if (reviewBody.totalCount === 0 && body.run.status === "NEEDS_REVIEW") {
             const completeResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { method: "POST" });
-            const completeBody = await completeResponse.json() as WalkthroughReview & { error?: { message?: string } };
-            if (!completeResponse.ok) throw new Error(completeBody.error?.message ?? "The empty review could not be completed.");
+            const completePayload = await completeResponse.json() as unknown;
+            if (!completeResponse.ok) {
+              const errorBody = completePayload as { error?: { message?: string } };
+              throw new Error(errorBody.error?.message ?? "The empty review could not be completed.");
+            }
+            const completeBody = WalkthroughReviewSchema.parse(completePayload);
             if (!cancelled) {
               setReview(completeBody);
               setStatus({ ...body, run: body.run ? { ...body.run, status: "REVIEWED" } : body.run });

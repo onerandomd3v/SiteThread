@@ -7,8 +7,9 @@ import { completeEmptyReview, reviewObservation, getWalkthroughReview, MVP_REVIE
 function fixture() {
   const reviewedAt = new Date("2026-01-01T00:00:00.000Z");
   const run = { id: "run-current", walkthroughId: "walk-1", pipelineVersion: "mvp-upload-v1", status: "NEEDS_REVIEW", createdAt: reviewedAt, completedAt: null as Date | null };
-  const transcript = { id: "segment-1", walkthroughId: "walk-1", processingRunId: "run-current", text: "Water is visible beside the doorway.", startSeconds: 12, endSeconds: 18 };
-  const evidence = { id: "evidence-1", observationId: "observation-1", mediaAssetId: "asset-1", transcriptSegmentId: "segment-1", sourceStartSeconds: 12, sourceEndSeconds: 18, label: "Narration 0:12–0:18", mediaAsset: { id: "asset-1", walkthroughId: "walk-1", kind: "SOURCE_VIDEO", status: "AVAILABLE", objectKey: "walkthroughs/walk-1/source.mp4", mimeType: "video/mp4", sourceStartSeconds: null, sourceEndSeconds: null, visualCandidates: [{ processingRunId: "run-current" }] }, transcriptSegment: transcript as typeof transcript | null, createdAt: reviewedAt };
+  const transcript = { id: "segment-1", walkthroughId: "walk-1", processingRunId: "run-current", sourceAssetId: "asset-1", text: "Water is visible beside the doorway.", startSeconds: 12, endSeconds: 18 };
+  const visualCandidates: Array<{ processingRunId: string }> = [];
+  const evidence = { id: "evidence-1", observationId: "observation-1", mediaAssetId: "asset-1", transcriptSegmentId: "segment-1", sourceStartSeconds: 12, sourceEndSeconds: 18, label: "Narration 0:12–0:18", mediaAsset: { id: "asset-1", walkthroughId: "walk-1", kind: "SOURCE_VIDEO", status: "AVAILABLE", objectKey: "walkthroughs/walk-1/source.mp4", mimeType: "video/mp4", sourceStartSeconds: null, sourceEndSeconds: null, visualCandidates }, transcriptSegment: transcript as typeof transcript | null, createdAt: reviewedAt };
   const observations = [{ id: "observation-1", walkthroughId: "walk-1", processingRunId: "run-current", sequence: 0, type: "POTENTIAL_ISSUE", sourceBasis: "NARRATION", originalDraftText: "Water is visible beside the doorway.", suggestedAction: "Ask the site supervisor to review the visible condition.", editedText: null as string | null, location: null, trade: null, confidence: 0.8, reviewState: "DRAFT", reviewerId: null as string | null, reviewedAt: null as Date | null, evidence: [evidence] }];
   const signedUrls: string[] = [];
   const storage = { createReadUrl: async ({ assetId }: { assetId: string }) => { signedUrls.push(assetId); return "https://media.test/temporary"; } } as unknown as MediaStorage;
@@ -100,6 +101,25 @@ describe("COD-19 finding review", () => {
     await expect(getWalkthroughReview("walk-1", { database: state.database, storage: state.storage })).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
 
+  it("rejects transcript evidence paired with a same-walkthrough but unrelated media asset", async () => {
+    const state = fixture();
+    state.observations[0].evidence[0].mediaAsset = { ...state.observations[0].evidence[0].mediaAsset, id: "asset-unrelated", objectKey: "walkthroughs/walk-1/unrelated.mp4" };
+    state.observations[0].evidence[0].mediaAssetId = "asset-unrelated";
+    await expect(getWalkthroughReview("walk-1", { database: state.database, storage: state.storage })).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(state.signedUrls).toEqual([]);
+  });
+
+  it("allows current-run visual evidence and rejects old-run visual evidence", async () => {
+    const state = fixture();
+    state.observations[0].evidence[0].transcriptSegment = null;
+    state.observations[0].evidence[0].mediaAsset.visualCandidates = [{ processingRunId: "run-current" }];
+    const visualReview = await getWalkthroughReview("walk-1", { database: state.database, storage: state.storage });
+    expect(visualReview.observations[0].evidence[0].mediaAvailability).toBe("AVAILABLE");
+    state.observations[0].evidence[0].mediaAsset.visualCandidates = [{ processingRunId: "run-old" }];
+    await expect(getWalkthroughReview("walk-1", { database: state.database, storage: state.storage })).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(state.signedUrls).toHaveLength(1);
+  });
+
   it("does not return a review DTO for a nonexistent walkthrough", async () => {
     const state = fixture();
     const missingDatabase = { ...state.database, walkthrough: { findUnique: async () => null } } as unknown as typeof db;
@@ -109,6 +129,7 @@ describe("COD-19 finding review", () => {
   it("does not expose a media URL when the cited asset is unavailable", async () => {
     const state = fixture();
     state.observations[0].evidence[0].transcriptSegment = null;
+    state.observations[0].evidence[0].mediaAsset.visualCandidates = [{ processingRunId: "run-current" }];
     state.observations[0].evidence[0].mediaAsset.status = "FAILED";
     const review = await getWalkthroughReview("walk-1", { database: state.database, storage: state.storage });
 

@@ -16,7 +16,7 @@ const observationInclude = {
     orderBy: { createdAt: "asc" as const },
     include: {
       mediaAsset: { select: { id: true, walkthroughId: true, kind: true, status: true, objectKey: true, mimeType: true, sourceStartSeconds: true, sourceEndSeconds: true, visualCandidates: { select: { processingRunId: true } } } },
-      transcriptSegment: { select: { id: true, walkthroughId: true, processingRunId: true, text: true, startSeconds: true, endSeconds: true } },
+      transcriptSegment: { select: { id: true, walkthroughId: true, processingRunId: true, sourceAssetId: true, text: true, startSeconds: true, endSeconds: true } },
     },
   },
 } satisfies Prisma.ObservationInclude;
@@ -62,6 +62,9 @@ async function mapObservation(
       throw new SiteThreadError("The observation evidence could not be verified.", "INTERNAL_ERROR");
     }
     if (transcript && (transcript.walkthroughId !== observation.walkthroughId || transcript.processingRunId !== expectedRunId)) {
+      throw new SiteThreadError("The observation evidence could not be verified.", "INTERNAL_ERROR");
+    }
+    if (transcript && item.mediaAssetId && (!transcript.sourceAssetId || item.mediaAssetId !== transcript.sourceAssetId || !media)) {
       throw new SiteThreadError("The observation evidence could not be verified.", "INTERNAL_ERROR");
     }
     let mediaAvailability: "AVAILABLE" | "UNAVAILABLE" | "NOT_APPLICABLE" = "NOT_APPLICABLE";

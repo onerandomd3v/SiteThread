@@ -43,6 +43,12 @@ export const WalkthroughReviewSchema = z.object({
   complete: z.boolean(),
 });
 
+export const ReviewMutationResponseSchema = z.object({
+  observation: ReviewObservationSchema,
+  review: WalkthroughReviewSchema,
+});
+
 export type ReviewEvidence = z.infer<typeof ReviewEvidenceSchema>;
 export type ReviewObservation = z.infer<typeof ReviewObservationSchema>;
 export type WalkthroughReview = z.infer<typeof WalkthroughReviewSchema>;
+export type ReviewMutationResponse = z.infer<typeof ReviewMutationResponseSchema>;
