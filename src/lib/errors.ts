@@ -1,6 +1,7 @@
 export type SiteThreadErrorCode =
   | "INVALID_INPUT"
   | "NOT_FOUND"
+  | "CONFLICT"
   | "MEDIA_UNAVAILABLE"
   | "PROCESSING_FAILED"
   | "PROVIDER_CONTRACT_UNRESOLVED"
