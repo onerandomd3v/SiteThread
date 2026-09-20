@@ -47,6 +47,31 @@ test("processing failure presents a recoverable retry action", async ({ page }) 
   await expect(page.getByRole("heading", { name: "Queued for processing" })).toBeVisible();
 });
 
+test("manual recovery restarts polling after a failed status request", async ({ page }) => {
+  let statusRequests = 0;
+  let recoveryRequests = 0;
+  let allowRecovery = false;
+  let recoveryStartedAt = 0;
+  let resumedAt = 0;
+  await page.route("**/api/walkthroughs/walk-recovery/status", async (route) => {
+    statusRequests += 1;
+    if (!allowRecovery) return route.fulfill({ status: 503, json: { error: { message: "Temporary status failure." } } });
+    recoveryRequests += 1;
+    if (recoveryRequests >= 3) resumedAt ||= Date.now();
+    return route.fulfill({ json: { walkthrough: { id: "walk-recovery", title: "Recovery walkthrough", project }, asset: { status: "AVAILABLE", mimeType: "video/mp4", byteSize: 1024 }, run: { status: recoveryRequests >= 3 ? "TRANSCRIBING" : "QUEUED", retryCount: 0, failedStep: null, errorMessage: null, retryable: null }, report: null } });
+  });
+  await page.goto("/walkthroughs/walk-recovery");
+  await expect(page.locator("main [role=alert]")).toContainText("Temporary status failure.");
+  await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(1);
+  recoveryStartedAt = Date.now();
+  allowRecovery = true;
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { name: "Queued for processing" })).toBeVisible();
+  await expect.poll(() => recoveryRequests, { timeout: 12000 }).toBeGreaterThanOrEqual(3);
+  await expect(page.getByRole("heading", { name: "Reading narration" })).toBeVisible();
+  expect(resumedAt - recoveryStartedAt).toBeGreaterThanOrEqual(3500);
+});
+
 test("status refreshes never overlap while an earlier response is settling", async ({ page }) => {
   let activeRequests = 0;
   let maximumActiveRequests = 0;
