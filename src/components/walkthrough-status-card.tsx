@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { FindingReviewPanel } from "@/components/finding-review-panel";
+import type { WalkthroughReview } from "@/lib/schemas/review";
 
 type StatusResponse = {
   walkthrough: { id: string; title: string | null; project: { id: string; name: string } };
@@ -13,14 +15,29 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [review, setReview] = useState<WalkthroughReview | null>(null);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setError(null);
     const response = await fetch(`/api/walkthroughs/${walkthroughId}/status`, { cache: "no-store" });
     const body = await response.json() as StatusResponse & { error?: { message?: string } };
     if (!response.ok) throw new Error(body.error?.message ?? "The walkthrough status could not be loaded.");
     setStatus(body);
-  }
+    if (body.run && ["NEEDS_REVIEW", "REVIEWED"].includes(body.run.status)) {
+      const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
+      const reviewBody = await reviewResponse.json() as WalkthroughReview & { error?: { message?: string } };
+      if (!reviewResponse.ok) throw new Error(reviewBody.error?.message ?? "The findings could not be loaded.");
+      if (reviewBody.totalCount === 0 && body.run.status === "NEEDS_REVIEW") {
+        const completeResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { method: "POST" });
+        const completeBody = await completeResponse.json() as WalkthroughReview & { error?: { message?: string } };
+        if (!completeResponse.ok) throw new Error(completeBody.error?.message ?? "The empty review could not be completed.");
+        setReview(completeBody);
+        setStatus({ ...body, run: body.run ? { ...body.run, status: "REVIEWED" } : body.run });
+      } else setReview(reviewBody);
+    } else {
+      setReview(null);
+    }
+  }, [walkthroughId]);
 
   async function retry() {
     setRetrying(true);
@@ -39,6 +56,14 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
     }
   }
 
+  async function reviewObservation(observationId: string, decision: { state: "CONFIRMED" | "DISMISSED" } | { state: "EDITED"; editedText: string }) {
+    const response = await fetch(`/api/walkthroughs/${walkthroughId}/observations/${observationId}/review`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(decision) });
+    const body = await response.json() as { review?: WalkthroughReview; error?: { message?: string } };
+    if (!response.ok) throw new Error(body.error?.message ?? "The review decision could not be saved.");
+    if (body.review) setReview(body.review);
+    await refresh();
+  }
+
   useEffect(() => {
     let cancelled = false;
     void fetch(`/api/walkthroughs/${walkthroughId}/status`, { cache: "no-store" })
@@ -47,7 +72,24 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
         if (!response.ok) throw new Error(body.error?.message ?? "The walkthrough status could not be loaded.");
         return body;
       })
-      .then((body) => { if (!cancelled) setStatus(body); })
+      .then(async (body) => {
+        if (cancelled) return;
+        setStatus(body);
+        if (body.run && ["NEEDS_REVIEW", "REVIEWED"].includes(body.run.status)) {
+          const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
+          const reviewBody = await reviewResponse.json() as WalkthroughReview & { error?: { message?: string } };
+          if (!reviewResponse.ok) throw new Error(reviewBody.error?.message ?? "The findings could not be loaded.");
+          if (reviewBody.totalCount === 0 && body.run.status === "NEEDS_REVIEW") {
+            const completeResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { method: "POST" });
+            const completeBody = await completeResponse.json() as WalkthroughReview & { error?: { message?: string } };
+            if (!completeResponse.ok) throw new Error(completeBody.error?.message ?? "The empty review could not be completed.");
+            if (!cancelled) {
+              setReview(completeBody);
+              setStatus({ ...body, run: body.run ? { ...body.run, status: "REVIEWED" } : body.run });
+            }
+          } else if (!cancelled) setReview(reviewBody);
+        }
+      })
       .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : "The walkthrough status could not be loaded."); });
     return () => { cancelled = true; };
   }, [walkthroughId]);
@@ -72,6 +114,7 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
           <button type="button" disabled={retrying} onClick={() => void retry()} className="ml-3 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{retrying ? "Retrying…" : "Retry processing"}</button>
         </>}
       </section>}
+      {review && status?.run && ["NEEDS_REVIEW", "REVIEWED"].includes(status.run.status) && <FindingReviewPanel review={review} onReview={reviewObservation} />}
     </main>
   );
 }

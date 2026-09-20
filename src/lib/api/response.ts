@@ -11,7 +11,7 @@ export function errorResponse(error: unknown): NextResponse {
     ? { ...serialized, message: "An internal error occurred." }
     : serialized;
   const status = error instanceof SiteThreadError
-    ? safeError.code === "NOT_FOUND" ? 404 : safeError.code === "INVALID_INPUT" ? 400 : safeError.code === "MEDIA_UNAVAILABLE" ? 409 : 500
+    ? safeError.code === "NOT_FOUND" ? 404 : safeError.code === "INVALID_INPUT" ? 400 : safeError.code === "CONFLICT" || safeError.code === "MEDIA_UNAVAILABLE" ? 409 : 500
     : 500;
   return NextResponse.json({ error: safeError }, { status });
 }
