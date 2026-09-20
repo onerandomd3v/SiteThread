@@ -128,15 +128,26 @@ function claimClauses(value: string): string[] {
     .filter(Boolean);
 }
 
-function matchesSingleEvidence(clause: string, evidence: ReasoningEvidence): boolean {
-  if (NEGATED_EVIDENCE.test(evidence.text)) return false;
+function matchesEvidenceFragment(clause: string, evidenceText: string): boolean {
+  if (NEGATED_EVIDENCE.test(evidenceText)) return false;
   const claimTokens = factualTokens(clause);
   if (claimTokens.length === 0) return true;
-  const evidenceTokens = new Set(factualTokens(evidence.text));
+  const evidenceTokens = new Set(factualTokens(evidenceText));
   if (claimTokens.some((token) => !evidenceTokens.has(token))) return false;
   const claimRelations = spatialRelations(clause);
-  const evidenceRelations = spatialRelations(evidence.text);
+  const evidenceRelations = spatialRelations(evidenceText);
   return [...claimRelations].every((relation) => evidenceRelations.has(relation));
+}
+
+function evidenceClauses(value: string): string[] {
+  return value
+    .split(/\s*(?:[.;]|\b(?:and|but|while)\b)\s*/i)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+}
+
+function matchesSingleEvidence(clause: string, evidence: ReasoningEvidence): boolean {
+  return evidenceClauses(evidence.text).some((fragment) => matchesEvidenceFragment(clause, fragment));
 }
 
 function requiredEvidenceKind(clause: string): ReasoningEvidence["kind"] | undefined {

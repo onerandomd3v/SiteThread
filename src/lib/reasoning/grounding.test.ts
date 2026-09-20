@@ -169,6 +169,27 @@ describe("observation evidence grounding", () => {
     expect(drafts).toEqual([]);
   });
 
+  it("does not combine separate evidence clauses into one factual claim", () => {
+    const splitContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-split",
+        mediaAssetId: "clip-split",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 2,
+        eventStartSeconds: 0,
+        eventEndSeconds: 2,
+        text: "A crack is visible above the window. Water is visible beside the doorway.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "A crack is visible beside the doorway.",
+      evidenceRefs: ["V0"],
+    }]), splitContext);
+    expect(drafts).toEqual([]);
+  });
+
   it("rejects cross-source claims that only become true by combining unrelated evidence", () => {
     const drafts = groundReasonedObservations(output([{
       type: "note",
