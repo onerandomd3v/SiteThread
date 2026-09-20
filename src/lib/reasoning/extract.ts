@@ -4,7 +4,6 @@ import { db } from "@/lib/db/client";
 import { SiteThreadError } from "@/lib/errors";
 import type { ProviderDiagnostic } from "@/lib/livepeer/types";
 import { sanitizeProviderResponse } from "@/lib/livepeer/sanitize";
-import { transitionProcessingRun } from "@/lib/processing/lifecycle";
 import { buildReasoningContext, groundReasonedObservations } from "./grounding";
 import { configuredObservationReasoner } from "./reasoner";
 import type { ObservationReasoner } from "./types";
@@ -52,8 +51,18 @@ export async function extractObservations(
   const diagnostic: ProviderDiagnostic = result.diagnostic;
 
   await database.$transaction(async (transaction) => {
-    const current = await transaction.processingRun.findUnique({ where: { id: runId } });
-    if (!current || current.status !== "EXTRACTING_OBSERVATIONS") return;
+    const claimed = await transaction.processingRun.updateMany({
+      where: { id: runId, status: "EXTRACTING_OBSERVATIONS" },
+      data: {
+        status: "NEEDS_REVIEW",
+        failedStep: null,
+        errorCode: null,
+        errorMessage: null,
+        retryable: null,
+        completedAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1) return;
     const rawResponse = sanitizeProviderResponse(diagnostic.rawResponse) as Prisma.InputJsonValue;
     await transaction.providerInvocation.upsert({
       where: { idempotencyKey },
@@ -91,6 +100,5 @@ export async function extractObservations(
         },
       });
     }
-    await transitionProcessingRun(runId, "NEEDS_REVIEW", {}, transaction);
   });
 }

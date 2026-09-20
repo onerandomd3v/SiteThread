@@ -65,6 +65,7 @@ const UNSUPPORTED_CLAIM = /\b(?:structur(?:al|ally)|load[- ]bearing|beam|foundat
 const UNSUPPORTED_REMEDIATION = /\b(?:repair|replace|fix|seal|remove|clean|rework|correct|demolish|secure|patch)\b/i;
 const REVIEW_ACTION = /^\s*(?:ask|have|request|refer|flag|invite)\s+(?:the\s+)?(?:site\s+)?(?:supervisor|professional|reviewer|team)\s+(?:to\s+)?(?:review|follow[- ]?up|inspect|assess|check)\s+(?:the\s+)?(?:visible\s+)?(?:condition|finding|observation|area)\.?\s*$/i;
 const SPATIAL_RELATIONS = new Set(["above", "at", "behind", "beside", "between", "by", "in", "inside", "near", "on", "under"]);
+const NEGATED_EVIDENCE = /\b(?:no|not|never|without|isn't|is\s+not|aren't|are\s+not|wasn't|was\s+not|weren't|were\s+not|doesn't|does\s+not|cannot|can't)\b/i;
 const STOP_WORDS = new Set([
   "a", "an", "and", "are", "as", "be", "for", "from", "is", "it", "of", "or", "reported", "reports", "the", "to", "was", "were", "with",
 ]);
@@ -121,13 +122,14 @@ function spatialRelations(value: string): Set<string> {
 
 function claimClauses(value: string): string[] {
   return value
-    .replace(/\b(?:and\s+)?(?:requires?|needs?)\s+(?:a\s+)?(?:professional|site\s+supervisor|supervisor)?\s*(?:review|follow[- ]?up)\b[\s\S]*$/i, "")
+    .replace(/\s+\b(?:and\s+)?(?:requires?|needs?)\s+(?:a\s+)?(?:professional|site\s+supervisor|supervisor)?\s*(?:review|follow[- ]?up)\b/gi, "")
     .split(/\s*(?:[.;]|\b(?:and|but|while)\b)\s*/i)
     .map((clause) => clause.trim())
     .filter(Boolean);
 }
 
 function matchesSingleEvidence(clause: string, evidence: ReasoningEvidence): boolean {
+  if (NEGATED_EVIDENCE.test(evidence.text)) return false;
   const claimTokens = factualTokens(clause);
   if (claimTokens.length === 0) return true;
   const evidenceTokens = new Set(factualTokens(evidence.text));

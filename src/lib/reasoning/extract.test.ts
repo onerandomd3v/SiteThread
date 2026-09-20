@@ -14,6 +14,11 @@ function scenario() {
     processingRun: {
       findUnique: async () => ({ ...run }),
       update: async ({ data }: { data: Record<string, unknown> }) => Object.assign(run, data),
+      updateMany: async ({ where, data }: { where: { id: string; status: string }; data: Record<string, unknown> }) => {
+        if (run.id !== where.id || run.status !== where.status) return { count: 0 };
+        Object.assign(run, data);
+        return { count: 1 };
+      },
     },
     transcriptSegment: {
       findMany: async () => [{ id: "segment-1", sourceAssetId: "source-1", sequence: 0, startSeconds: 0, endSeconds: 6, text: "The supervisor reports water at the doorway." }],
@@ -137,6 +142,16 @@ describe("observation extraction persistence", () => {
     await extractObservations("run-1", { database: state.database, reasoner: new FixtureObservationReasoner() });
     expect(state.created).toHaveLength(13);
     expect(state.created.every((observation) => (observation.evidence as { create: unknown[] }).create.length === 1)).toBe(true);
+    expect(state.run.status).toBe("NEEDS_REVIEW");
+  });
+
+  it("allows only one concurrent worker to claim observation persistence", async () => {
+    const state = scenario();
+    await Promise.all([
+      extractObservations("run-1", { database: state.database, reasoner: state.reasoner }),
+      extractObservations("run-1", { database: state.database, reasoner: state.reasoner }),
+    ]);
+    expect(state.created).toHaveLength(1);
     expect(state.run.status).toBe("NEEDS_REVIEW");
   });
 });

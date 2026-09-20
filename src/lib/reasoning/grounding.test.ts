@@ -139,6 +139,36 @@ describe("observation evidence grounding", () => {
     expect(drafts).toEqual([]);
   });
 
+  it("rejects a positive claim when cited evidence negates the condition", () => {
+    const negatedContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-negative",
+        mediaAssetId: "clip-negative",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "No water is visible beside the doorway.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible beside the doorway.",
+      evidenceRefs: ["V0"],
+    }]), negatedContext);
+    expect(drafts).toEqual([]);
+  });
+
+  it("does not discard unsupported claims appended after a review follow-up", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible beside the north doorway and requires professional review. A gas leak is visible.",
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
   it("rejects cross-source claims that only become true by combining unrelated evidence", () => {
     const drafts = groundReasonedObservations(output([{
       type: "note",
