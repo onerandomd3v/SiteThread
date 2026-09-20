@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SiteThreadError } from "@/lib/errors";
 import { ReportObservationSnapshotSchema } from "@/lib/schemas/media";
 import { SiteReportSchema } from "@/lib/schemas/report";
-import { buildReportSnapshot, frameOffsetSeconds, reportIdForSnapshot, type ReportSourceRecord } from "./service";
+import { buildReportSnapshot, frameOffsetSeconds, getReport, reportIdForSnapshot, type ReportSourceRecord } from "./service";
 
 function sourceObservation(overrides: Partial<ReportSourceRecord> = {}): ReportSourceRecord {
   return {
@@ -104,5 +104,53 @@ describe("COD-20 report service", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.generatedAt).toBeInstanceOf(Date);
+  });
+
+  it("preserves unknown attribution on legacy persisted reports", async () => {
+    const legacyReport = {
+      id: "report-legacy",
+      generatedAt: new Date("2026-09-20T10:00:00.000Z"),
+      generatedBy: null,
+      projectName: "Site",
+      walkthroughId: "walkthrough-1",
+      walkthroughTitle: "Walk",
+      walkthroughCapturedAt: null,
+      walkthroughCreatedAt: new Date("2026-09-20T09:00:00.000Z"),
+      walkthroughDurationSeconds: 30,
+      walkthrough: { id: "walkthrough-1", project: { id: "project-1", name: "Site" } },
+      observations: [{
+        id: "report-observation-1",
+        observationId: "observation-1",
+        type: "NOTE",
+        sourceBasis: "NARRATION",
+        text: "Reviewed",
+        suggestedAction: null,
+        location: null,
+        trade: null,
+        reviewState: "CONFIRMED",
+        reviewerId: null,
+        reviewedAt: null,
+        sortOrder: 0,
+        evidence: [{
+          id: "report-evidence-1",
+          sourceWalkthroughId: "walkthrough-1",
+          sourceEvidenceId: "evidence-1",
+          mediaAssetId: null,
+          transcriptSegmentId: "segment-1",
+          sourceStartSeconds: 1,
+          sourceEndSeconds: 2,
+          label: "Narration",
+          transcriptText: "Reviewed",
+        }],
+      }],
+    };
+    const database = {
+      report: { findUnique: async () => legacyReport },
+      mediaAsset: { findMany: async () => [] },
+    } as never;
+
+    const result = await getReport("report-legacy", { database });
+
+    expect(result).toMatchObject({ generatedBy: null, findings: [{ reviewerId: null, reviewedAt: null }] });
   });
 });

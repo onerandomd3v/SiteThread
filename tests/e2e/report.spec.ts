@@ -55,18 +55,13 @@ test("report evidence returns to a REPORT_READY walkthrough as read-only anchore
     reportRequests += 1;
     await route.fulfill({ json: report });
   });
-  await page.route("**/reports/report-1*", (route) => route.fulfill({
-    status: 200,
-    contentType: "text/html",
-    body: '<main><h1>Reviewed site record</h1><a href="/walkthroughs/walk-1#finding-confirmed-1-evidence-evidence-confirmed">Open source evidence</a></main>',
-  }));
-
   await page.goto("/walkthroughs/walk-1");
   await expect(page.getByRole("button", { name: "Generate report" })).toBeVisible();
   await page.getByRole("button", { name: "Generate report" }).click();
   await expect.poll(() => reportRequests).toBe(1);
 
-  await page.goto("/reports/report-1");
+  await page.setContent('<main><h1>Reviewed site record</h1><a href="/walkthroughs/walk-1#finding-confirmed-1-evidence-evidence-confirmed">Open source evidence</a></main>');
+  await page.evaluate(() => history.replaceState(null, "", "/reports/report-1"));
   await page.getByRole("link", { name: "Open source evidence" }).click();
   await expect(page).toHaveURL(/\/walkthroughs\/walk-1#finding-confirmed-1-evidence-evidence-confirmed$/);
   await expect(page.locator("#finding-confirmed-1-evidence-evidence-confirmed")).toBeVisible();

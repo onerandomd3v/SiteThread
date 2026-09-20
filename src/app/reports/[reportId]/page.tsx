@@ -29,7 +29,7 @@ function Finding({ finding }: { finding: ReportFinding }) {
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{finding.type.replaceAll("_", " ")}</p>
         <p className="mt-1 text-xs font-semibold text-emerald-800">{finding.reviewState === "EDITED" ? "Human edited" : "Human confirmed"}</p>
       </div>
-      <p className="text-xs text-slate-500">{finding.reviewerId} · {dateLabel(finding.reviewedAt)}</p>
+      <p className="text-xs text-slate-500">{finding.reviewerId ?? "Unknown reviewer"} · {dateLabel(finding.reviewedAt)}</p>
     </div>
     {(finding.location || finding.trade) && <p className="text-sm text-slate-600">{[finding.location, finding.trade].filter(Boolean).join(" · ")}</p>}
     <p className="text-base leading-7 text-slate-950">{finding.text}</p>
@@ -54,7 +54,7 @@ export default async function ReportPage({ params }: { params: Promise<{ reportI
     <div className="report-print-controls flex items-center justify-between gap-4"><Link href={`/walkthroughs/${report.walkthrough.id}`} className="text-sm font-semibold text-slate-600 underline">← Back to walkthrough</Link><PrintReportButton /></div>
     <header className="space-y-4 border-b border-slate-300 pb-6">
       <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">SiteThread</p><h1 className="mt-2 text-4xl font-semibold text-slate-950">Reviewed site record</h1></div><p className="text-sm text-slate-600">Generated {dateLabel(report.generatedAt)}</p></div>
-      <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2"><p><span className="font-semibold">Project:</span> {report.project.name}</p><p><span className="font-semibold">Walkthrough:</span> {report.walkthrough.title}</p><p><span className="font-semibold">Captured:</span> {dateLabel(report.walkthrough.capturedAt)}</p><p><span className="font-semibold">Reviewer:</span> {report.generatedBy}</p></div>
+      <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2"><p><span className="font-semibold">Project:</span> {report.project.name}</p><p><span className="font-semibold">Walkthrough:</span> {report.walkthrough.title}</p><p><span className="font-semibold">Captured:</span> {dateLabel(report.walkthrough.capturedAt)}</p><p><span className="font-semibold">Reviewer:</span> {report.generatedBy ?? "Unknown reviewer"}</p></div>
     </header>
     <div className="space-y-8">{groups.map((group) => { const findings = report.findings.filter((finding) => finding.type === group.key); return findings.length > 0 ? <section key={group.key} className="space-y-3"><h2 className="text-2xl font-semibold text-slate-950">{group.label}</h2>{findings.map((finding) => <Finding key={finding.reportObservationId} finding={finding} />)}</section> : null; })}</div>
     <footer className="border-t border-slate-300 pt-5 text-sm leading-6 text-slate-600">This report records reviewed observations from the referenced walkthrough and supporting evidence. It is not an engineering approval, safety certification, or code-compliance determination.</footer>

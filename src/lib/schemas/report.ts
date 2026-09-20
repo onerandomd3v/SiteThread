@@ -27,8 +27,8 @@ export const ReportFindingSchema = z.object({
   location: z.string().trim().min(1).nullable(),
   trade: z.string().trim().min(1).nullable(),
   reviewState: z.enum(["CONFIRMED", "EDITED"]),
-  reviewerId: z.string().min(1),
-  reviewedAt: z.coerce.date(),
+  reviewerId: z.string().min(1).nullable(),
+  reviewedAt: z.coerce.date().nullable(),
   evidence: z.array(ReportEvidenceSchema).min(1),
 });
 export type ReportFinding = z.infer<typeof ReportFindingSchema>;
@@ -36,7 +36,7 @@ export type ReportFinding = z.infer<typeof ReportFindingSchema>;
 export const SiteReportSchema = z.object({
   reportId: z.string().min(1),
   generatedAt: z.coerce.date(),
-  generatedBy: z.string().min(1),
+  generatedBy: z.string().min(1).nullable(),
   project: z.object({ id: z.string().min(1), name: z.string().min(1) }),
   walkthrough: z.object({
     id: z.string().min(1),

@@ -253,7 +253,7 @@ async function mapReport(report: PersistedReport, database: typeof db): Promise<
   return SiteReportSchema.parse({
     reportId: report.id,
     generatedAt: report.generatedAt,
-    generatedBy: report.generatedBy ?? MVP_REVIEWER_ID,
+    generatedBy: report.generatedBy,
     project: { id: report.walkthrough.project.id, name: report.projectName },
     walkthrough: {
       id: report.walkthroughId,
@@ -272,8 +272,8 @@ async function mapReport(report: PersistedReport, database: typeof db): Promise<
       location: observation.location,
       trade: observation.trade,
       reviewState: observation.reviewState,
-      reviewerId: observation.reviewerId ?? MVP_REVIEWER_ID,
-      reviewedAt: observation.reviewedAt ?? report.generatedAt,
+      reviewerId: observation.reviewerId,
+      reviewedAt: observation.reviewedAt,
       evidence: await Promise.all(observation.evidence.map(async (evidence) => {
         const asset = evidence.mediaAssetId ? mediaById.get(evidence.mediaAssetId) : undefined;
         const validAsset = asset && asset.walkthroughId === report.walkthroughId && asset.status === "AVAILABLE";
