@@ -62,3 +62,22 @@ export async function retryProcessingRun(runId: string, database: Prisma.Transac
   const updated = await database.processingRun.findUniqueOrThrow({ where: { id: runId } });
   return { id: updated.id, walkthroughId: updated.walkthroughId, status: updated.status };
 }
+
+export async function failProcessingRunIfCurrent(
+  runId: string,
+  expectedStatus: ProcessingStatus,
+  details: { failedStep?: string; errorCode?: string; errorMessage?: string; retryable?: boolean },
+  database: Prisma.TransactionClient | typeof db = db,
+): Promise<boolean> {
+  const updated = await database.processingRun.updateMany({
+    where: { id: runId, status: expectedStatus },
+    data: {
+      status: "PROCESSING_FAILED",
+      failedStep: details.failedStep,
+      errorCode: details.errorCode,
+      errorMessage: details.errorMessage,
+      retryable: details.retryable,
+    },
+  });
+  return updated.count === 1;
+}

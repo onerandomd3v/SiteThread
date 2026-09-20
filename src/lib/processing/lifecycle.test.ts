@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { db } from "@/lib/db/client";
-import { canTransitionProcessingStatus, retryProcessingRun } from "./lifecycle";
+import { canTransitionProcessingStatus, failProcessingRunIfCurrent, retryProcessingRun } from "./lifecycle";
 
 describe("processing lifecycle", () => {
   it("allows the upload and durable queue transitions", () => {
@@ -32,5 +32,27 @@ describe("processing lifecycle", () => {
     await Promise.all([retryProcessingRun("run", database), retryProcessingRun("run", database)]);
     expect(run.retryCount).toBe(1);
     expect(run.status).toBe("QUEUED");
+  });
+
+  it("does not replace a completed extraction with a late failure", async () => {
+    const run = {
+      id: "run",
+      status: "NEEDS_REVIEW",
+      failedStep: null as string | null,
+      errorCode: null as string | null,
+      errorMessage: null as string | null,
+      retryable: null as boolean | null,
+    };
+    const database = {
+      processingRun: {
+        updateMany: async ({ where, data }: { where: { id: string; status: string }; data: Record<string, unknown> }) => {
+          if (run.id !== where.id || run.status !== where.status) return { count: 0 };
+          Object.assign(run, data);
+          return { count: 1 };
+        },
+      },
+    } as unknown as typeof db;
+    await expect(failProcessingRunIfCurrent("run", "EXTRACTING_OBSERVATIONS", { failedStep: "EXTRACTING_OBSERVATIONS" }, database)).resolves.toBe(false);
+    expect(run).toEqual({ id: "run", status: "NEEDS_REVIEW", failedStep: null, errorCode: null, errorMessage: null, retryable: null });
   });
 });

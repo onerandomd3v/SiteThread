@@ -564,13 +564,13 @@ interface ObservationDraft {
   location?: string;
   trade?: string;
   description: string;
-  startSeconds?: number;
-  endSeconds?: number;
   confidence?: number;
-  evidenceAssetIds: string[];
-  transcriptSegmentIds: string[];
+  suggestedAction?: string;
+  evidenceRefs: string[];
 }
 ```
+
+The reasoner receives only normalized text evidence labeled with stable `T0` and `V0` references. It does not receive media URLs, database IDs, or permission to provide timestamps. SiteThread validates every reference, derives source basis and source ranges from the transcript and visual candidate records, and persists every result as a `DRAFT` observation linked to `ObservationEvidence`.
 
 ## 13.1 Agent rules
 
@@ -583,7 +583,8 @@ The observation reasoner must:
 - avoid autonomous engineering conclusions;
 - prefer uncertain wording when confidence is low;
 - always provide evidence references;
-- return strict structured output.
+- return strict structured output, including an honest empty result;
+- omit claims that assert safety, code compliance, inspection approval, engineering acceptance, completion percentages, causes, or financial entitlement.
 
 ---
 
@@ -796,7 +797,7 @@ src/app/                             minimal Next.js App Router entry point
 tests/e2e/                           Playwright foundation
 ```
 
-Prisma owns relational records and migrations. COD-16 stores private source media in R2 and queues a durable `ProcessingRun`; COD-17 dispatches that run to Trigger.dev for FFmpeg, Livepeer transcription, and visual candidate persistence. Provider contracts return normalized, provider-neutral results. Each visual candidate keeps the full source clip range; a validated provider event range is stored separately as a hint. The worker stops at `EXTRACTING_OBSERVATIONS` for COD-18. `ReportObservation` snapshots eligible reviewed wording so a later edit requires report regeneration instead of silently changing an existing report.
+Prisma owns relational records and migrations. COD-16 stores private source media in R2 and queues a durable `ProcessingRun`; COD-17 dispatches that run to Trigger.dev for FFmpeg, Livepeer transcription, and visual candidate persistence. COD-18 resumes at `EXTRACTING_OBSERVATIONS`, reasons over that run's normalized evidence, atomically persists run-scoped draft observations and evidence links, and transitions to `NEEDS_REVIEW`. Provider contracts return normalized, provider-neutral results. Each visual candidate keeps the full source clip range; a validated provider event range is stored separately as a hint. `ReportObservation` snapshots eligible reviewed wording so a later edit requires report regeneration instead of silently changing an existing report.
 
 ---
 

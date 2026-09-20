@@ -3,6 +3,7 @@ import type { db } from "@/lib/db/client";
 import { ProviderCallError } from "@/lib/livepeer/provider";
 import type { MediaIntelligenceProvider } from "@/lib/livepeer/types";
 import type { ProcessingMediaStorage } from "@/lib/storage/types";
+import type { ObservationReasoner } from "@/lib/reasoning/types";
 import { retryProcessingRun } from "./lifecycle";
 import { processWalkthrough, providerInvocationKey, type ProcessingMediaTools } from "./pipeline";
 
@@ -13,6 +14,7 @@ function scenario(failVisualOnce = false) {
   const segments = new Map<string, Record<string, unknown>>();
   const candidates = new Map<string, Record<string, unknown>>();
   const invocations = new Map<string, Record<string, unknown>>();
+  const observations: Record<string, unknown>[] = [];
   const transitions: string[] = [];
   const providerKeys: string[] = [];
   let visualCalls = 0;
@@ -25,7 +27,7 @@ function scenario(failVisualOnce = false) {
         transitions.push(run.status);
         return { ...run };
       },
-      updateMany: async ({ where, data }: { where: { status: string }; data: Record<string, unknown> }) => {
+      updateMany: async ({ where, data }: { where: { id?: string; status: string }; data: Record<string, unknown> }) => {
         if (run.status !== where.status) return { count: 0 };
         if (data.retryCount && typeof data.retryCount === "object") run.retryCount += 1;
         Object.assign(run, { ...data, retryCount: run.retryCount });
@@ -65,6 +67,11 @@ function scenario(failVisualOnce = false) {
         candidates.set(key, { ...(candidates.get(key) ?? create), ...update });
         return candidates.get(key);
       },
+      findMany: async () => [...candidates.values()].filter((candidate) => candidate.processingRunId === run.id),
+    },
+    observation: {
+      deleteMany: async () => undefined,
+      create: async ({ data }: { data: Record<string, unknown> }) => { observations.push(data); return data; },
     },
     $transaction: async (work: unknown) => typeof work === "function" ? (work as (tx: typeof database) => Promise<unknown>)(database) : Promise.all(work as Promise<unknown>[]),
   } as unknown as typeof db;
@@ -88,19 +95,22 @@ function scenario(failVisualOnce = false) {
       return { value: { text: "Visible condition", eventRange: { startSeconds: 1, endSeconds: 3 } }, diagnostic: { provider: "fixture", capability: "marlin-video", idempotencyKey, rawResponse: { video_url: "https://private.example/secret", text: "visible" }, latencyMs: 2 } };
     },
   };
-  return { database, storage, media, provider, run, segments, candidates, invocations, transitions, providerKeys, get visualCalls() { return visualCalls; } };
+  const reasoner: ObservationReasoner = {
+    extract: async (input) => ({ value: { observations: [] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }),
+  };
+  return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get visualCalls() { return visualCalls; } };
 }
 
 describe("COD-17 processing pipeline", () => {
   it("persists source-aligned transcript and visual evidence, then stops at observation handoff", async () => {
     const state = scenario();
-    await processWalkthrough("run", state);
-    expect(state.transitions).toEqual(["TRANSCRIBING", "ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS"]);
+    await processWalkthrough("run", { ...state, reasoner: state.reasoner });
+    expect(state.transitions).toEqual(["TRANSCRIBING", "ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS", "NEEDS_REVIEW"]);
     expect([...state.segments.values()].map((segment) => [segment.startSeconds, segment.endSeconds])).toEqual([[0, 6], [6, 12]]);
     expect(state.candidates.size).toBe(1);
     expect([...state.candidates.values()][0]).toMatchObject({ sourceStartSeconds: 0, sourceEndSeconds: 6, eventStartSeconds: 1, eventEndSeconds: 3, provider: "fixture" });
     expect(JSON.stringify([...state.invocations.values()])).not.toContain("private.example");
-    await processWalkthrough("run", state);
+    await processWalkthrough("run", { ...state, reasoner: state.reasoner });
     expect(state.segments.size).toBe(2);
     expect(state.candidates.size).toBe(1);
     expect(state.providerKeys).toHaveLength(3);
@@ -108,14 +118,14 @@ describe("COD-17 processing pipeline", () => {
 
   it("keeps completed transcription after a visual failure and reuses stable invocation keys on retry", async () => {
     const state = scenario(true);
-    await expect(processWalkthrough("run", state)).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+    await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
     expect(state.run.status).toBe("PROCESSING_FAILED");
     expect(state.run.failedStep).toBe("ANALYZING_MEDIA");
     expect((state.run as typeof state.run & { retryable: boolean }).retryable).toBe(true);
     expect(state.segments.size).toBe(2);
     await retryProcessingRun("run", state.database);
-    await processWalkthrough("run", state);
-    expect(state.run.status).toBe("EXTRACTING_OBSERVATIONS");
+    await processWalkthrough("run", { ...state, reasoner: state.reasoner });
+    expect(state.run.status).toBe("NEEDS_REVIEW");
     expect(state.run.retryCount).toBe(1);
     expect(state.segments.size).toBe(2);
     expect(state.candidates.size).toBe(1);
@@ -130,13 +140,23 @@ describe("COD-17 processing pipeline", () => {
     const oldIdentity = { processingRunId: "older-run", sourceAssetId: "source", startSeconds: 0, endSeconds: 6 };
     state.segments.set(JSON.stringify(oldIdentity), { ...oldIdentity, walkthroughId: "walk", sequence: 0, text: "Earlier version" });
     state.run.status = "TRANSCRIBING";
-    await processWalkthrough("run", state);
+    await processWalkthrough("run", { ...state, reasoner: state.reasoner });
     expect(state.segments.size).toBe(3);
     expect(state.segments.get(JSON.stringify(oldIdentity))?.text).toBe("Earlier version");
-    expect(state.transitions).toEqual(["ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS"]);
+    expect(state.transitions).toEqual(["ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS", "NEEDS_REVIEW"]);
     state.run.status = "ANALYZING_MEDIA";
-    await processWalkthrough("run", state);
+    await processWalkthrough("run", { ...state, reasoner: state.reasoner });
     expect(state.segments.size).toBe(3);
     expect(state.candidates.size).toBe(1);
+  });
+
+  it("marks an extraction failure at EXTRACTING_OBSERVATIONS without redoing media work", async () => {
+    const state = scenario();
+    state.run.status = "EXTRACTING_OBSERVATIONS";
+    state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
+    await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
+    expect(state.run.status).toBe("PROCESSING_FAILED");
+    expect(state.run.failedStep).toBe("EXTRACTING_OBSERVATIONS");
+    expect(state.providerKeys).toHaveLength(0);
   });
 });

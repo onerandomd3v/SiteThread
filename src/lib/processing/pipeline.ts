@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MediaAssetKind, MediaAssetStatus, Prisma } from "@prisma/client";
+import { MediaAssetKind, MediaAssetStatus, Prisma, type ProcessingStatus } from "@prisma/client";
 import { db } from "@/lib/db/client";
 import { SiteThreadError, serializeError } from "@/lib/errors";
 import type { MediaIntelligenceProvider, ProviderDiagnostic } from "@/lib/livepeer/types";
@@ -11,8 +11,10 @@ import { sanitizeProviderResponse } from "@/lib/livepeer/sanitize";
 import { extractAudioWindow, extractVisualClip, probeDuration } from "@/lib/media/ffmpeg";
 import { r2MediaStorage } from "@/lib/storage/r2";
 import type { ProcessingMediaStorage } from "@/lib/storage/types";
+import { extractObservations } from "@/lib/reasoning/extract";
+import type { ObservationReasoner } from "@/lib/reasoning/types";
 import { providerEventSourceRange, audioWindows, visualClips, type SourceRange } from "./selection";
-import { transitionProcessingRun } from "./lifecycle";
+import { failProcessingRunIfCurrent, transitionProcessingRun } from "./lifecycle";
 
 const SIGNED_READ_SECONDS = 15 * 60;
 
@@ -52,14 +54,23 @@ async function saveProviderFailure(database: typeof db, runId: string, stage: st
 
 export async function processWalkthrough(
   runId: string,
-  dependencies: { database?: typeof db; storage?: ProcessingMediaStorage; provider?: MediaIntelligenceProvider; media?: ProcessingMediaTools } = {},
+  dependencies: { database?: typeof db; storage?: ProcessingMediaStorage; provider?: MediaIntelligenceProvider; media?: ProcessingMediaTools; reasoner?: ObservationReasoner } = {},
 ): Promise<void> {
   const database = dependencies.database ?? db;
   const storage = dependencies.storage ?? r2MediaStorage;
   const media = dependencies.media ?? ffmpegTools;
   const run = await database.processingRun.findUnique({ where: { id: runId }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("The processing run was not found.", "NOT_FOUND");
-  if (run.status === "EXTRACTING_OBSERVATIONS") return;
+  if (run.status === "EXTRACTING_OBSERVATIONS") {
+    try {
+      await extractObservations(runId, { database, reasoner: dependencies.reasoner });
+      return;
+    } catch (error) {
+      const safe = serializeError(error);
+      await failProcessingRunIfCurrent(runId, "EXTRACTING_OBSERVATIONS", { failedStep: "EXTRACTING_OBSERVATIONS", errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
+      throw new SiteThreadError(safe.message, safe.code, safe.retryable);
+    }
+  }
   if (!["QUEUED", "TRANSCRIBING", "ANALYZING_MEDIA"].includes(run.status)) return;
   if (run.status === "QUEUED") {
     const claimed = await database.processingRun.updateMany({
@@ -70,7 +81,7 @@ export async function processWalkthrough(
   }
   const source = run.walkthrough.mediaAssets.find((asset) => asset.kind === MediaAssetKind.SOURCE_VIDEO && asset.status === MediaAssetStatus.AVAILABLE);
   let directory: string | undefined;
-  let stage = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
+  let stage: ProcessingStatus = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
   try {
     if (!source) throw new SiteThreadError("The private source walkthrough is unavailable.", "MEDIA_UNAVAILABLE");
     const provider = dependencies.provider ?? configuredMediaProvider();
@@ -164,10 +175,12 @@ export async function processWalkthrough(
         });
       });
     }
+    stage = "EXTRACTING_OBSERVATIONS";
     await transitionProcessingRun(runId, "EXTRACTING_OBSERVATIONS", {}, database);
+    await extractObservations(runId, { database, reasoner: dependencies.reasoner });
   } catch (error) {
     const safe = serializeError(error);
-    await transitionProcessingRun(runId, "PROCESSING_FAILED", { failedStep: stage, errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
+    await failProcessingRunIfCurrent(runId, stage, { failedStep: stage, errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
     throw new SiteThreadError(safe.message, safe.code, safe.retryable);
   } finally {
     if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);

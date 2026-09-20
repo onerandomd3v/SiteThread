@@ -135,7 +135,8 @@ Map the selected synchronous lifecycle into existing processing states as follow
 | Durable processing run created; work not started | `QUEUED` |
 | FFmpeg audio windowing or any selected ASR call in progress | `TRANSCRIBING` |
 | Clip selection, FFmpeg clip extraction, or any selected Marlin call in progress | `ANALYZING_MEDIA` |
-| All required normalized transcripts and visual results persisted | `EXTRACTING_OBSERVATIONS` |
+| All required normalized transcripts and visual candidates persisted; observation reasoning is ready | `EXTRACTING_OBSERVATIONS` |
+| Run-scoped draft observations and evidence links atomically persisted | `NEEDS_REVIEW` |
 | Retryable transport/provider failure while attempts remain | Keep the current stage and increment `retryCount` |
 | Nonretryable failure, invalid result, exhausted attempts, or whole-stage deadline | `PROCESSING_FAILED` with `failedStep`, stable error code, safe message, and retry count |
 
@@ -207,6 +208,8 @@ Displayed rates before execution were $0.00014/second for Nemotron ASR, $0.00007
 | Image candidate: `gemini-text` | `fal-ai/any-llm` | Prompt and `source_url`; `max_tokens: 200`, `temperature: 0` | Returned a Markdown-fenced JSON string reporting unavailable image access. The workshop's request pattern did not establish vision in this test. |
 | Image candidate: `nemotron-omni` | `nvidia/nemotron-3-nano-omni` | Prompt, `source_url`, `inputs.image_url`, `reasoning_mode: "no_think"`, `max_tokens: 200`, `temperature: 0` | Returned a JSON string reporting unavailable image access. The registered base model must not be assumed to use the separate upstream vision route. |
 | Video candidate: `marlin-video` | `fal-ai/marlin` | `inputs.video_url`, documented spatial/event prompt, `max_tokens: 200`, `do_sample: false` | `get_create_media` returned `status: "done"` and `run_output.result: { text, model_id }`. Text contained scene prose and time-ranged events. Verified video-understanding candidate; direct image/frame contract remains unselected. |
+
+COD-18 uses the discovered `gemini-text` capability only as a text reasoning step after media candidates are persisted. The current registry describes it as available text output through `run_capability` with model ID `fal-ai/any-llm`; the reasoner sends normalized transcript and visual-candidate descriptions labeled with SiteThread-owned references and no media URLs. The earlier image request that reported unavailable image access remains evidence that `gemini-text` is not a selected visual route.
 
 The synchronous ASR/Gemini/Omni probes used `async: false` and `timeout: 60`. Whisper used `async: true` and `timeout: 120`; Marlin used `async: true` and `timeout: 260`. All used `persist: false`, an application `session_id`, and a unique `idempotency_key` per logical request. The temporary client had a separate 90-second HTTP deadline, which was not reached; asynchronous inference continued independently of its submission request.
 
