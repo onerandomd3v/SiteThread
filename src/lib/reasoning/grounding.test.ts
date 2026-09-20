@@ -160,6 +160,166 @@ describe("observation evidence grounding", () => {
     expect(drafts).toEqual([]);
   });
 
+  it("retains an identical grounded negative visual observation", () => {
+    const negativeContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-negative-guardrail",
+        mediaAssetId: "clip-negative-guardrail",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "No guardrail is visible beside the doorway.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "No guardrail is visible beside the doorway.",
+      evidenceRefs: ["V0"],
+    }]), negativeContext);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].sourceBasis).toBe("VISUAL");
+  });
+
+  it("rejects a negative claim against positive evidence", () => {
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "No water is visible beside the north doorway.",
+      evidenceRefs: ["V0"],
+    }]), context());
+    expect(drafts).toEqual([]);
+  });
+
+  it("does not move a negative condition between nouns or locations", () => {
+    const negativeContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-negative-reversal",
+        mediaAssetId: "clip-negative-reversal",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "No water is visible beside the doorway.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "No doorway is visible beside water.",
+      evidenceRefs: ["V0"],
+    }]), negativeContext);
+    expect(drafts).toEqual([]);
+  });
+
+  it("does not reverse visual subject and location roles", () => {
+    const visualContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-role-reversal",
+        mediaAssetId: "clip-role-reversal",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "A ladder is visible above the doorway.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "The doorway is visible above the ladder.",
+      evidenceRefs: ["V0"],
+    }]), visualContext);
+    expect(drafts).toEqual([]);
+  });
+
+  it("does not reverse subject and location roles for non-visible spatial predicates", () => {
+    const pooledContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-pooled-role-reversal",
+        mediaAssetId: "clip-pooled-role-reversal",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "Water is pooled beside the doorway.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "The doorway is pooled beside water.",
+      evidenceRefs: ["V0"],
+    }]), pooledContext);
+    expect(drafts).toEqual([]);
+  });
+
+  it("retains a narration-backed negative claim without allowing a safety conclusion", () => {
+    const negativeContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "negative-narration",
+        sourceAssetId: null,
+        sequence: 0,
+        startSeconds: 0,
+        endSeconds: 1,
+        text: "The supervisor reports no water at the doorway.",
+      }],
+      visualCandidates: [],
+    });
+    const grounded = groundReasonedObservations(output([{
+      type: "note",
+      description: "No water is reported at the doorway.",
+      evidenceRefs: ["T0"],
+    }]), negativeContext);
+    expect(grounded).toHaveLength(1);
+    expect(grounded[0].sourceBasis).toBe("NARRATION");
+
+    const unsafe = groundReasonedObservations(output([{
+      type: "note",
+      description: "The area is unsafe because no guardrail is visible.",
+      evidenceRefs: ["T0"],
+    }]), negativeContext);
+    expect(unsafe).toEqual([]);
+  });
+
+  it("matches equivalent negative forms and coordinated negative subjects conservatively", () => {
+    const equivalentContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-negative-equivalent",
+        mediaAssetId: "clip-negative-equivalent",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "Water is not visible beside the doorway.",
+      }],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "No water is visible beside the doorway.",
+      evidenceRefs: ["V0"],
+    }]), equivalentContext)).toHaveLength(1);
+
+    const coordinatedContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-negative-coordinated",
+        mediaAssetId: "clip-negative-coordinated",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "No water and debris are visible beside the doorway.",
+      }],
+    });
+    expect(groundReasonedObservations(output([{
+      type: "note",
+      description: "No water is visible beside the doorway.",
+      evidenceRefs: ["V0"],
+    }]), coordinatedContext)).toHaveLength(1);
+  });
+
   it("does not discard unsupported claims appended after a review follow-up", () => {
     const drafts = groundReasonedObservations(output([{
       type: "note",
@@ -187,6 +347,104 @@ describe("observation evidence grounding", () => {
       description: "A crack is visible beside the doorway.",
       evidenceRefs: ["V0"],
     }]), splitContext);
+    expect(drafts).toEqual([]);
+  });
+
+  it("supports coordinated noun phrases sharing a visual predicate", () => {
+    const coordinatedContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-coordinated",
+        mediaAssetId: "clip-coordinated",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "Water and debris are visible beside the doorway.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible beside the doorway.",
+      evidenceRefs: ["V0"],
+    }]), coordinatedContext);
+    expect(drafts).toHaveLength(1);
+  });
+
+  it("supports coordinated objects while keeping independent predicates isolated", () => {
+    const coordinatedContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "coordinated-narration",
+        sourceAssetId: null,
+        sequence: 0,
+        startSeconds: 0,
+        endSeconds: 1,
+        text: "The supervisor reports water and debris beside the doorway.",
+      }],
+      visualCandidates: [{
+        id: "independent-visual",
+        mediaAssetId: "clip-independent",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "Water is visible beside the doorway and debris is visible near the window.",
+      }],
+    });
+    const coordinated = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is reported beside the doorway.",
+      evidenceRefs: ["T0"],
+    }]), coordinatedContext);
+    expect(coordinated).toHaveLength(1);
+
+    const isolated = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible near the window.",
+      evidenceRefs: ["V0"],
+    }]), coordinatedContext);
+    expect(isolated).toEqual([]);
+  });
+
+  it("splits clear independent predicates after coordinated evidence", () => {
+    const independentContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-independent-predicate",
+        mediaAssetId: "clip-independent-predicate",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "Water is visible beside the doorway and debris covers the window.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible beside the window.",
+      evidenceRefs: ["V0"],
+    }]), independentContext);
+    expect(drafts).toEqual([]);
+  });
+
+  it("splits an independent predicate after a long coordinated suffix", () => {
+    const independentContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-long-independent-predicate",
+        mediaAssetId: "clip-long-independent-predicate",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "Water is visible beside the doorway and the large pile of debris covers the window.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible beside the window.",
+      evidenceRefs: ["V0"],
+    }]), independentContext);
     expect(drafts).toEqual([]);
   });
 
@@ -236,6 +494,29 @@ describe("observation evidence grounding", () => {
       evidenceRefs: ["T0", "V1"],
     }]), context());
     expect(drafts).toEqual([]);
+  });
+
+  it("does not derive optional location from an unrelated evidence clause", () => {
+    const unrelatedLocationContext = buildReasoningContext({
+      transcriptSegments: [],
+      visualCandidates: [{
+        id: "visual-unrelated-location",
+        mediaAssetId: "clip-unrelated-location",
+        sourceStartSeconds: 0,
+        sourceEndSeconds: 1,
+        eventStartSeconds: 0,
+        eventEndSeconds: 1,
+        text: "Water is visible beside the north doorway and the South tower is nearby.",
+      }],
+    });
+    const drafts = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is visible beside the north doorway.",
+      location: "South tower",
+      evidenceRefs: ["V0"],
+    }]), unrelatedLocationContext);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).not.toHaveProperty("location");
   });
 
   it("allows a directly supported condition with a review-oriented follow-up", () => {
