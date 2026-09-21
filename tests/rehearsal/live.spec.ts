@@ -27,14 +27,20 @@ test("completes two fresh live golden-path runs", async ({ browser, baseURL }) =
     await expect(page.getByRole("heading", { name: "Ready for your review" })).toBeVisible({ timeout: 2 * 60 * 60 * 1000 });
     const findings = page.locator('article[data-testid^="finding-"]');
     await expect.poll(() => findings.count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(3);
+    const findingCount = await findings.count();
     await expect(findings.nth(0).getByText(/Evidence/)).toBeVisible();
     await findings.nth(0).getByRole("button", { name: "Confirm", exact: true }).click();
-    await findings.nth(1).getByRole("button", { name: "Edit", exact: true }).click();
-    const edit = findings.nth(1).locator("textarea");
-    await edit.fill(`${await edit.inputValue()}.`);
-    await findings.nth(1).getByRole("button", { name: "Save edit" }).click();
-    await findings.nth(2).getByRole("button", { name: "Dismiss", exact: true }).click();
-    await expect(page.getByTestId("review-progress")).toContainText("3 of 3 reviewed");
+    for (let index = 1; index < findingCount; index += 1) {
+      if (index === 1) {
+        await findings.nth(index).getByRole("button", { name: "Edit", exact: true }).click();
+        const edit = findings.nth(index).locator("textarea");
+        await edit.fill(`${await edit.inputValue()}.`);
+        await findings.nth(index).getByRole("button", { name: "Save edit" }).click();
+      } else {
+        await findings.nth(index).getByRole("button", { name: "Dismiss", exact: true }).click();
+      }
+    }
+    await expect(page.getByTestId("review-progress")).toContainText(`${findingCount} of ${findingCount} reviewed`);
     await page.getByRole("button", { name: /Generate report|Preparing reviewed record/ }).click();
     await expect(page).toHaveURL(/\/reports\/[^/]+$/, { timeout: 120_000 });
     const reportId = new URL(page.url()).pathname.split("/").pop();
@@ -53,7 +59,7 @@ test("completes two fresh live golden-path runs", async ({ browser, baseURL }) =
     await expect(page.getByRole("button", { name: "Confirm", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Dismiss", exact: true })).toHaveCount(0);
-    runs.push({ walkthroughId, reportId, referenceFingerprint, mode: "live", elapsedMs: Date.now() - startedAt, findingCount: await findings.count(), reviewedCount: 3, reportFindingCount: 2 });
+    runs.push({ walkthroughId, reportId, referenceFingerprint, mode: "live", elapsedMs: Date.now() - startedAt, findingCount, reviewedCount: findingCount, reportFindingCount: 2 });
     await context.close();
   }
   await mkdir(".rehearsal", { recursive: true });

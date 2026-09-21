@@ -40,7 +40,8 @@ test("golden path preserves review decisions and report eligibility", async ({ p
   await expect(findings).toHaveCount(3);
   await findings.nth(0).getByRole("button", { name: "Confirm", exact: true }).click();
   await findings.nth(1).getByRole("button", { name: "Edit", exact: true }).click();
-  await findings.nth(1).locator("textarea").fill("Review the north doorway.");
+  const editedText = "Inspect the north doorway clearance.";
+  await findings.nth(1).locator("textarea").fill(editedText);
   await findings.nth(1).getByRole("button", { name: "Save edit" }).click();
   await findings.nth(2).getByRole("button", { name: "Dismiss", exact: true }).click();
   await expect(page.getByTestId("review-progress")).toContainText("3 of 3 reviewed");
@@ -49,6 +50,7 @@ test("golden path preserves review decisions and report eligibility", async ({ p
   await expect.poll(() => reportRequests).toBe(1);
   const generatedReport = buildReport();
   expect(generatedReport.findings).toHaveLength(2);
+  expect(generatedReport.findings.find((finding) => finding.sourceObservationId === "finding-2")?.text).toBe(editedText);
   expect(generatedReport.findings.every((finding) => finding.reviewState !== "DISMISSED")).toBe(true);
   await page.reload();
   await expect(page.getByRole("heading", { name: "Report ready" })).toBeVisible();

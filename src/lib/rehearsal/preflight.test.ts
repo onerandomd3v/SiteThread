@@ -11,6 +11,7 @@ describe("live reference media preflight", () => {
   it.each([
     ["short", { durationSeconds: 59 }],
     ["long", { durationSeconds: 121 }],
+    ["non-finite", { durationSeconds: Number.NaN }],
     ["silent", { streams: [{ codecType: "video", codecName: "h264" }] }],
     ["unsupported video", { streams: [{ codecType: "video", codecName: "vp9" }, { codecType: "audio", codecName: "aac" }] }],
   ])("rejects %s reference media", (_label, override) => {

@@ -15,7 +15,7 @@ export type ReferenceMediaMetadata = {
 
 export function validateReferenceMedia(metadata: ReferenceMediaMetadata): ReferenceMediaMetadata {
   if (metadata.byteSize <= 0 || metadata.byteSize > MAX_WALKTHROUGH_UPLOAD_BYTES) throw new Error("The reference media exceeds the current upload policy.");
-  if (metadata.durationSeconds < 60 || metadata.durationSeconds > 120) throw new Error("The reference media must be between 60 and 120 seconds.");
+  if (!Number.isFinite(metadata.durationSeconds) || metadata.durationSeconds < 60 || metadata.durationSeconds > 120) throw new Error("The reference media must be between 60 and 120 seconds.");
   if (!metadata.streams.some((stream) => stream.codecType === "video" && stream.codecName === "h264")) throw new Error("The reference media must contain H.264 video.");
   if (!metadata.streams.some((stream) => stream.codecType === "audio" && stream.codecName === "aac")) throw new Error("The reference media must contain AAC audio.");
   return metadata;

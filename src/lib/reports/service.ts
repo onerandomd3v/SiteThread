@@ -301,7 +301,7 @@ async function mapReport(report: PersistedReport, database: typeof db): Promise<
 export async function generateReport(walkthroughId: string, dependencies: ReportDependencies = {}): Promise<SiteReport> {
   const database = dependencies.database ?? db;
   const now = dependencies.now ?? (() => new Date());
-  return database.$transaction(async (transaction) => {
+  const result = await database.$transaction(async (transaction) => {
     const initialRun = await transaction.processingRun.findFirst({ where: currentRunWhere(walkthroughId), orderBy: { createdAt: "desc" } });
     if (!initialRun) throw new SiteThreadError("The walkthrough processing run was not found.", "NOT_FOUND");
     await lockRun(transaction, initialRun.id);
@@ -314,17 +314,17 @@ export async function generateReport(walkthroughId: string, dependencies: Report
     const reportId = reportIdForSnapshot(snapshot);
     const existing = await transaction.report.findUnique({ where: { id: reportId }, include: reportInclude });
     if (existing) {
-      logEvent("report.generated", { walkthroughId, processingRunId: run.id, reportId: existing.id, outcome: "reused" });
-      return mapReport(existing, database);
+      return { report: await mapReport(existing, database), event: { walkthroughId, processingRunId: run.id, reportId: existing.id, outcome: "reused" as const } };
     }
     if (run.status === "REPORT_READY") throw new SiteThreadError("The persisted report does not match the reviewed snapshot.", "CONFLICT");
     const generatedAt = now();
     const created = await transaction.report.create({ data: reportCreateData(reportId, snapshot, { projectName: walkthrough.project.name, title: walkthrough.title, capturedAt: walkthrough.capturedAt, createdAt: walkthrough.createdAt, durationSeconds: walkthrough.durationSeconds }, generatedAt), include: reportInclude });
     const transitioned = await transaction.processingRun.updateMany({ where: { id: run.id, status: "REVIEWED" }, data: { status: "REPORT_READY", completedAt: generatedAt } });
     if (transitioned.count !== 1) throw new SiteThreadError("The walkthrough changed while the report was being generated.", "CONFLICT");
-    logEvent("report.generated", { walkthroughId, processingRunId: run.id, reportId, outcome: "created" });
-    return mapReport(created, database);
+    return { report: await mapReport(created, database), event: { walkthroughId, processingRunId: run.id, reportId, outcome: "created" as const } };
   });
+  logEvent("report.generated", result.event);
+  return result.report;
 }
 
 export async function getReport(reportId: string, dependencies: ReportDependencies = {}): Promise<SiteReport> {
