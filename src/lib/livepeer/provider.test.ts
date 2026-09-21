@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SiteThreadError } from "@/lib/errors";
-import { LivepeerMediaIntelligenceProvider, ProviderCallError } from "./provider";
+import { configuredMediaProvider, LivepeerMediaIntelligenceProvider, ProviderCallError } from "./provider";
+import { FixtureMediaIntelligenceProvider } from "./fixture";
 import { sanitizeProviderResponse } from "./sanitize";
 
 const endpoint = "https://agent.livepeer.org/api/mcp/raw";
@@ -32,6 +33,20 @@ function providerWithRun(run: (request: Record<string, unknown>, call: number) =
 }
 
 describe("Livepeer raw MCP adapter", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("selects the explicitly configured fixture or live provider", () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
+    vi.stubEnv("LIVEPEER_MCP_URL", endpoint);
+
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "fixture");
+    expect(configuredMediaProvider()).toBeInstanceOf(FixtureMediaIntelligenceProvider);
+
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
+    expect(configuredMediaProvider()).toBeInstanceOf(LivepeerMediaIntelligenceProvider);
+  });
+
   it("accepts only the frozen Livepeer raw MCP endpoint before making a request", () => {
     const fetcher = vi.fn(async () => rpc({})) as unknown as typeof fetch;
     expect(() => new LivepeerMediaIntelligenceProvider(endpoint, "test-placeholder", fetcher)).not.toThrow();

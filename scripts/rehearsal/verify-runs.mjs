@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { PrismaClient } from "@prisma/client";
+import { validateReportArtifactBinding, validateReportObservationEvidence } from "./provenance.mjs";
 
 const prisma = new PrismaClient();
 const artifactDir = `${process.cwd()}/.rehearsal`;
@@ -43,15 +44,26 @@ for (const runRecord of input.runs) {
   const reports = walkthrough.reports.filter((report) => report.observations.length > 0);
   if (reports.length !== 1) fail(`${walkthrough.id} has ${reports.length} logical reports`);
   const report = reports[0];
+  try { validateReportArtifactBinding(report.id, runRecord.reportId); } catch (error) { fail(`${walkthrough.id} ${error instanceof Error ? error.message : String(error)}`); }
+  const sourceObservations = new Map(observations.map((observation) => [observation.id, observation]));
+  const mediaIds = report.observations.flatMap((observation) => observation.evidence.map((evidence) => evidence.mediaAssetId).filter(Boolean));
+  const mediaAssets = await prisma.mediaAsset.findMany({
+    where: { id: { in: mediaIds } },
+    include: {
+      visualCandidates: {
+        where: { processingRunId: run.id },
+        select: {
+          processingRunId: true,
+          walkthroughId: true,
+          providerInvocation: { select: { processingRunId: true, provider: true, capability: true, status: true } },
+        },
+      },
+    },
+  });
+  const mediaById = new Map(mediaAssets.map((asset) => [asset.id, asset]));
   for (const observation of report.observations) {
-    if (!observations.some((candidate) => candidate.id === observation.observationId)) fail("report observation is not from the current run");
-    if (!["CONFIRMED", "EDITED"].includes(observation.reviewState)) fail("report contains an ineligible review state");
-    if (observation.evidence.length === 0) fail("report finding has no evidence");
-    for (const evidence of observation.evidence) {
-      if (evidence.sourceWalkthroughId !== walkthrough.id) fail("report evidence points to another walkthrough");
-      if (evidence.sourceStartSeconds !== null && evidence.sourceEndSeconds !== null && evidence.sourceEndSeconds < evidence.sourceStartSeconds) fail("report evidence range is reversed");
-      if (evidence.transcriptSegmentId && !segments.some((segment) => segment.id === evidence.transcriptSegmentId)) fail("report transcript evidence is from another run");
-    }
+    const sourceObservation = sourceObservations.get(observation.observationId);
+    try { validateReportObservationEvidence({ observation, sourceObservation, segments, mediaById, walkthrough, processingRunId: run.id }); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
   }
   verified.push({ walkthroughId: walkthrough.id, processingRunId: run.id, reportId: report.id, mode: "live", providerCapabilities: requiredCapabilities, finalStatus: run.status, findingCount: observations.length, reportFindingCount: report.observations.length, providerInvocationCount: invocations.length });
 }

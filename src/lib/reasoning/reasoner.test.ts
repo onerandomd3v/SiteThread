@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { FixtureObservationReasoner, LivepeerObservationReasoner } from "./reasoner";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { FixtureObservationReasoner, LivepeerObservationReasoner, configuredObservationReasoner } from "./reasoner";
 import type { ObservationReasoningInput } from "./types";
 
 const input: ObservationReasoningInput = {
@@ -29,6 +29,20 @@ function liveReasoner(responseText: string, capture: string[]) {
 }
 
 describe("observation reasoner", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("selects the explicitly configured fixture or live reasoner", () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
+    vi.stubEnv("LIVEPEER_MCP_URL", "https://agent.livepeer.org/api/mcp/raw");
+
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "fixture");
+    expect(configuredObservationReasoner()).toBeInstanceOf(FixtureObservationReasoner);
+
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
+    expect(configuredObservationReasoner()).toBeInstanceOf(LivepeerObservationReasoner);
+  });
+
   it("uses a deterministic fixture without making a network request", async () => {
     const result = await new FixtureObservationReasoner().extract(input);
     expect(result.value.observations).toEqual([

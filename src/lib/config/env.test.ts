@@ -5,6 +5,7 @@ const requiredValues = {
   DATABASE_URL: "postgresql://user:password@localhost:5432/sitethread",
   R2_BUCKET_NAME: "sitethread-media",
   LIVEPEER_MCP_URL: "https://agent.livepeer.org/api/mcp",
+  MEDIA_PROVIDER_MODE: "fixture",
 };
 
 describe("server environment contract", () => {
@@ -24,5 +25,11 @@ describe("server environment contract", () => {
     expect(() => parseServerEnv({ ...requiredValues, DATABASE_URL: undefined })).toThrow();
     expect(() => parseServerEnv({ ...requiredValues, LIVEPEER_MCP_URL: "not-a-url" })).toThrow();
     expect(() => parseServerEnv({ ...requiredValues, R2_BUCKET_NAME: "" })).toThrow();
+  });
+
+  it("requires an explicit provider mode", () => {
+    expect(() => parseServerEnv({ ...requiredValues, MEDIA_PROVIDER_MODE: undefined })).toThrow();
+    expect(parseServerEnv({ ...requiredValues, MEDIA_PROVIDER_MODE: "fixture" }).MEDIA_PROVIDER_MODE).toBe("fixture");
+    expect(parseServerEnv({ ...requiredValues, MEDIA_PROVIDER_MODE: "live" }).MEDIA_PROVIDER_MODE).toBe("live");
   });
 });

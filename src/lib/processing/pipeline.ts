@@ -64,27 +64,15 @@ export async function processWalkthrough(
   const run = await database.processingRun.findUnique({ where: { id: runId }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("The processing run was not found.", "NOT_FOUND");
   logEvent("processing.run.started", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, status: run.status, retryCount: run.retryCount });
-  if (run.status === "EXTRACTING_OBSERVATIONS") {
-    try {
-      await extractObservations(runId, { database, reasoner: dependencies.reasoner });
-      return;
-    } catch (error) {
-      const safe = serializeError(error);
-      await failProcessingRunIfCurrent(runId, "EXTRACTING_OBSERVATIONS", { failedStep: "EXTRACTING_OBSERVATIONS", errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
-      throw new SiteThreadError(safe.message, safe.code, safe.retryable);
-    }
-  }
-  if (!["QUEUED", "TRANSCRIBING", "ANALYZING_MEDIA"].includes(run.status)) return;
-  if (run.status === "QUEUED") {
-    const claimed = await database.processingRun.updateMany({
-      where: { id: runId, status: "QUEUED" },
-      data: { status: "TRANSCRIBING", startedAt: new Date(), failedStep: null, errorCode: null, errorMessage: null, retryable: null },
-    });
-    if (claimed.count !== 1) return;
-  }
+  if (run.status !== "QUEUED") return;
+  const claimed = await database.processingRun.updateMany({
+    where: { id: runId, status: "QUEUED" },
+    data: { status: "TRANSCRIBING", startedAt: new Date(), failedStep: null, errorCode: null, errorMessage: null, retryable: null },
+  });
+  if (claimed.count !== 1) return;
   const source = run.walkthrough.mediaAssets.find((asset) => asset.kind === MediaAssetKind.SOURCE_VIDEO && asset.status === MediaAssetStatus.AVAILABLE);
   let directory: string | undefined;
-  let stage: ProcessingStatus = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
+  let stage: ProcessingStatus = "TRANSCRIBING";
   logEvent("processing.stage.started", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, stage });
   try {
     if (!source) throw new SiteThreadError("The private source walkthrough is unavailable.", "MEDIA_UNAVAILABLE");
@@ -100,7 +88,7 @@ export async function processWalkthrough(
     const windows = audioWindows(duration);
     await provider.discoverCapabilities();
 
-    for (const [sequence, range] of (run.status === "ANALYZING_MEDIA" ? [] : windows).entries()) {
+    for (const [sequence, range] of windows.entries()) {
       const identity = { processingRunId: runId, sourceAssetId: source.id, startSeconds: range.startSeconds, endSeconds: range.endSeconds };
       const existing = await database.transcriptSegment.findUnique({ where: { processingRunId_sourceAssetId_startSeconds_endSeconds: identity } });
       if (existing?.processingRunId === runId && existing.sourceAssetId === source.id && existing.startSeconds === range.startSeconds && existing.endSeconds === range.endSeconds && existing.text.trim()) continue;
@@ -134,7 +122,7 @@ export async function processWalkthrough(
 
     stage = "ANALYZING_MEDIA";
     logEvent("processing.stage.started", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, stage });
-    if (run.status !== "ANALYZING_MEDIA") await transitionProcessingRun(runId, "ANALYZING_MEDIA", {}, database);
+    await transitionProcessingRun(runId, "ANALYZING_MEDIA", {}, database);
     const transcript = await database.transcriptSegment.findMany({ where: { walkthroughId: run.walkthroughId, processingRunId: runId }, orderBy: { sequence: "asc" } });
     const clips = visualClips(duration, transcript.map(({ startSeconds, endSeconds, text }) => ({ startSeconds, endSeconds, text })));
     for (const [index, range] of clips.entries()) {

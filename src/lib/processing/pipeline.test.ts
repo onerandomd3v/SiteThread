@@ -18,6 +18,7 @@ function scenario(failVisualOnce = false) {
   const transitions: string[] = [];
   const providerKeys: string[] = [];
   let visualCalls = 0;
+  let reasonerCalls = 0;
   const database = {
     processingRun: {
       findUnique: async () => ({ ...run, walkthrough: { mediaAssets: [...assets.values()] } }),
@@ -96,9 +97,9 @@ function scenario(failVisualOnce = false) {
     },
   };
   const reasoner: ObservationReasoner = {
-    extract: async (input) => ({ value: { observations: [] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }),
+    extract: async (input) => { reasonerCalls += 1; return { value: { observations: [] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }; },
   };
-  return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get visualCalls() { return visualCalls; } };
+  return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get reasonerCalls() { return reasonerCalls; }, get visualCalls() { return visualCalls; } };
 }
 
 describe("COD-17 processing pipeline", () => {
@@ -135,28 +136,43 @@ describe("COD-17 processing pipeline", () => {
     expect(state.providerKeys[2]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
   });
 
-  it("keeps transcript windows from another pipeline run and resumes a redelivered worker", async () => {
+  it("claims a queued run once when two workers overlap", async () => {
+    const state = scenario();
+    await Promise.all([
+      processWalkthrough("run", { ...state, reasoner: state.reasoner }),
+      processWalkthrough("run", { ...state, reasoner: state.reasoner }),
+    ]);
+    expect(state.providerKeys).toHaveLength(3);
+    expect(state.reasonerCalls).toBe(1);
+    expect(state.segments.size).toBe(2);
+    expect(state.candidates.size).toBe(1);
+    expect(state.observations).toHaveLength(0);
+    expect(state.run.status).toBe("NEEDS_REVIEW");
+  });
+
+  it("does not resume an active or extraction-stage run after redelivery", async () => {
     const state = scenario();
     const oldIdentity = { processingRunId: "older-run", sourceAssetId: "source", startSeconds: 0, endSeconds: 6 };
     state.segments.set(JSON.stringify(oldIdentity), { ...oldIdentity, walkthroughId: "walk", sequence: 0, text: "Earlier version" });
     state.run.status = "TRANSCRIBING";
     await processWalkthrough("run", { ...state, reasoner: state.reasoner });
-    expect(state.segments.size).toBe(3);
+    expect(state.segments.size).toBe(1);
     expect(state.segments.get(JSON.stringify(oldIdentity))?.text).toBe("Earlier version");
-    expect(state.transitions).toEqual(["ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS", "NEEDS_REVIEW"]);
+    expect(state.transitions).toEqual([]);
     state.run.status = "ANALYZING_MEDIA";
     await processWalkthrough("run", { ...state, reasoner: state.reasoner });
-    expect(state.segments.size).toBe(3);
-    expect(state.candidates.size).toBe(1);
+    state.run.status = "EXTRACTING_OBSERVATIONS";
+    await processWalkthrough("run", { ...state, reasoner: state.reasoner });
+    expect(state.providerKeys).toHaveLength(0);
+    expect(state.reasonerCalls).toBe(0);
   });
 
-  it("marks an extraction failure at EXTRACTING_OBSERVATIONS without redoing media work", async () => {
+  it("marks an extraction failure after the claimed worker reaches EXTRACTING_OBSERVATIONS", async () => {
     const state = scenario();
-    state.run.status = "EXTRACTING_OBSERVATIONS";
     state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
     await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
     expect(state.run.status).toBe("PROCESSING_FAILED");
     expect(state.run.failedStep).toBe("EXTRACTING_OBSERVATIONS");
-    expect(state.providerKeys).toHaveLength(0);
+    expect(state.providerKeys).toHaveLength(3);
   });
 });

@@ -15,7 +15,7 @@ const serverEnvSchema = z.object({
   TRIGGER_PROJECT_REF: optionalSecret,
   LIVEPEER_MCP_URL: z.string().url(),
   LIVEPEER_MCP_BEARER: optionalSecret,
-  MEDIA_PROVIDER_MODE: z.enum(["live", "fixture"]).default("fixture"),
+  MEDIA_PROVIDER_MODE: z.enum(["live", "fixture"]),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
