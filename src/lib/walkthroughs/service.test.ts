@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SiteThreadError } from "@/lib/errors";
 import type { MediaStorage } from "@/lib/storage/types";
-import { createUploadIntent, finalizeUpload, retryWalkthrough } from "./service";
+import { createUploadIntent, finalizeUpload, listRecentWalkthroughs, retryWalkthrough } from "./service";
 import type { db } from "@/lib/db/client";
 import { PIPELINE_VERSION } from "@/lib/processing/lifecycle";
 
@@ -146,5 +146,16 @@ describe("walkthrough upload service", () => {
     expect(first).toMatchObject({ id: "run", status: "QUEUED", retryCount: 1 });
     expect(second.id).toBe(first.id);
     expect(run.retryCount).toBe(1);
+  });
+
+  it("lists only the latest project walkthroughs with safe lifecycle metadata", async () => {
+    const now = new Date("2026-09-21T10:00:00.000Z");
+    const database = {
+      project: { findUnique: async () => ({ id: "project-1" }) },
+      walkthrough: { findMany: async () => [{ id: "walk-1", title: "Morning walk", createdAt: now, updatedAt: now, processingRuns: [{ id: "run-1", status: "REPORT_READY", updatedAt: now }] }] },
+      report: { findMany: async ({ where }: { where: unknown }) => { expect(where).toEqual({ OR: [{ walkthroughId: "walk-1", observations: { some: { observation: { processingRunId: "run-1" } } } }] }); return [{ id: "report-1", walkthroughId: "walk-1" }]; } },
+    } as unknown as typeof db;
+
+    await expect(listRecentWalkthroughs("project-1", database)).resolves.toEqual([{ id: "walk-1", title: "Morning walk", createdAt: now, updatedAt: now, run: { status: "REPORT_READY", updatedAt: now }, report: { id: "report-1" } }]);
   });
 });

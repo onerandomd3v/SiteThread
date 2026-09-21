@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FindingReviewPanel } from "@/components/finding-review-panel";
+import { isActiveProcessingStatus, isReviewStatus, processingStages, processingStatusLabel } from "@/lib/processing/status-labels";
 import { SiteReportSchema } from "@/lib/schemas/report";
 import { WalkthroughReviewSchema, type WalkthroughReview } from "@/lib/schemas/review";
 import { saveReviewDecision } from "@/lib/observations/review-client";
@@ -15,54 +16,100 @@ type StatusResponse = {
   report: { id: string } | null;
 };
 
+const POLL_INTERVAL_MS = 4000;
+
+function stageIndex(status: string | null | undefined): number {
+  if (status === "QUEUED" || status === "UPLOADED") return status === "UPLOADED" ? -1 : 0;
+  if (status === "TRANSCRIBING") return 1;
+  if (status === "ANALYZING_MEDIA") return 2;
+  if (status === "EXTRACTING_OBSERVATIONS") return 3;
+  if (status === "NEEDS_REVIEW" || status === "REVIEWED" || status === "REPORT_READY") return 4;
+  return -1;
+}
+
+async function parseResponse<T>(response: Response, fallback: string): Promise<T> {
+  const payload = await response.json() as T & { error?: { message?: string } };
+  if (!response.ok) throw new Error(payload.error?.message ?? fallback);
+  return payload;
+}
+
 export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string }) {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
   const [review, setReview] = useState<WalkthroughReview | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [pollCycle, setPollCycle] = useState(0);
+  const requestSequence = useRef(0);
+  const inFlightOwner = useRef<number | null>(null);
+  const pollTimer = useRef<number | null>(null);
+  const generation = useRef(0);
+  const activeController = useRef<AbortController | null>(null);
   const router = useRouter();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal, expectedGeneration?: number): Promise<StatusResponse | null> => {
+    if (inFlightOwner.current !== null) return null;
+    const owner = ++requestSequence.current;
+    inFlightOwner.current = owner;
     setError(null);
-    const response = await fetch(`/api/walkthroughs/${walkthroughId}/status`, { cache: "no-store" });
-    const body = await response.json() as StatusResponse & { error?: { message?: string } };
-    if (!response.ok) throw new Error(body.error?.message ?? "The walkthrough status could not be loaded.");
-    setStatus(body);
-    if (body.run && ["NEEDS_REVIEW", "REVIEWED", "REPORT_READY"].includes(body.run.status)) {
-      const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
-      const reviewPayload = await reviewResponse.json() as unknown;
-      if (!reviewResponse.ok) {
-        const errorBody = reviewPayload as { error?: { message?: string } };
-        throw new Error(errorBody.error?.message ?? "The findings could not be loaded.");
+    const requestGeneration = expectedGeneration ?? generation.current;
+    const isStale = () => signal?.aborted === true || requestGeneration !== generation.current;
+    try {
+      const body = await parseResponse<StatusResponse>(await fetch(`/api/walkthroughs/${walkthroughId}/status`, { cache: "no-store", signal }), "The walkthrough status could not be loaded.");
+      if (isStale()) return null;
+      let nextStatus = body;
+      if (body.run && isReviewStatus(body.run.status)) {
+        const reviewBody = await parseResponse<WalkthroughReview>(await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store", signal }), "The findings could not be loaded.");
+        if (isStale()) return null;
+        const parsedReview = WalkthroughReviewSchema.parse(reviewBody);
+        if (parsedReview.totalCount === 0 && body.run.status === "NEEDS_REVIEW") {
+          const completeBody = await parseResponse<WalkthroughReview>(await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { method: "POST", signal }), "The empty review could not be completed.");
+          if (isStale()) return null;
+          const completedReview = WalkthroughReviewSchema.parse(completeBody);
+          setReview(completedReview);
+          nextStatus = { ...body, run: { ...body.run, status: "REVIEWED" } };
+        } else setReview(parsedReview);
+      } else setReview(null);
+      setStatus(nextStatus);
+      return nextStatus;
+    } catch (caught) {
+      if (isStale() || (caught instanceof DOMException && caught.name === "AbortError")) return null;
+      setError(caught instanceof Error ? caught.message : "The walkthrough status could not be loaded.");
+      return null;
+    } finally {
+      if (inFlightOwner.current === owner) {
+        inFlightOwner.current = null;
+        if (!isStale()) setLoading(false);
       }
-      const reviewBody = WalkthroughReviewSchema.parse(reviewPayload);
-      if (reviewBody.totalCount === 0 && body.run.status === "NEEDS_REVIEW") {
-        const completeResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { method: "POST" });
-        const completePayload = await completeResponse.json() as unknown;
-        if (!completeResponse.ok) {
-          const errorBody = completePayload as { error?: { message?: string } };
-          throw new Error(errorBody.error?.message ?? "The empty review could not be completed.");
-        }
-        const completeBody = WalkthroughReviewSchema.parse(completePayload);
-        setReview(completeBody);
-        setStatus({ ...body, run: body.run ? { ...body.run, status: "REVIEWED" } : body.run });
-      } else setReview(reviewBody);
-    } else {
-      setReview(null);
     }
   }, [walkthroughId]);
+
+  function restartPolling() {
+    setPollCycle((current) => current + 1);
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const expectedGeneration = generation.current + 1;
+    generation.current = expectedGeneration;
+    activeController.current = controller;
+    let cancelled = false;
+    const poll = async () => {
+      const nextStatus = await refresh(controller.signal, expectedGeneration);
+      if (!cancelled && isActiveProcessingStatus(nextStatus?.run?.status)) pollTimer.current = window.setTimeout(() => { void poll(); }, POLL_INTERVAL_MS);
+    };
+    void poll();
+    return () => { cancelled = true; generation.current += 1; controller.abort(); inFlightOwner.current = null; if (activeController.current === controller) activeController.current = null; if (pollTimer.current !== null) window.clearTimeout(pollTimer.current); };
+  }, [pollCycle, refresh]);
 
   async function retry() {
     setRetrying(true);
     setError(null);
     try {
-      const response = await fetch(`/api/walkthroughs/${walkthroughId}/retry`, { method: "POST" });
-      if (!response.ok) {
-        const body = await response.json() as { error?: { message?: string } };
-        throw new Error(body.error?.message ?? "Processing could not be retried.");
-      }
-      await refresh();
+      await parseResponse<{ run: unknown }>(await fetch(`/api/walkthroughs/${walkthroughId}/retry`, { method: "POST", signal: activeController.current?.signal }), "Processing could not be retried.");
+      await refresh(activeController.current?.signal);
+      setPollCycle((current) => current + 1);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Processing could not be retried.");
     } finally {
@@ -80,13 +127,7 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
     setGeneratingReport(true);
     setError(null);
     try {
-      const response = await fetch(`/api/walkthroughs/${walkthroughId}/report`, { method: "POST" });
-      const payload = await response.json() as unknown;
-      if (!response.ok) {
-        const errorBody = payload as { error?: { message?: string } };
-        throw new Error(errorBody.error?.message ?? "The report could not be generated.");
-      }
-      const report = SiteReportSchema.parse(payload);
+      const report = SiteReportSchema.parse(await parseResponse<unknown>(await fetch(`/api/walkthroughs/${walkthroughId}/report`, { method: "POST" }), "The report could not be generated."));
       router.push(`/reports/${report.reportId}` as never);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The report could not be generated.");
@@ -95,73 +136,23 @@ export function WalkthroughStatusCard({ walkthroughId }: { walkthroughId: string
     }
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    void fetch(`/api/walkthroughs/${walkthroughId}/status`, { cache: "no-store" })
-      .then(async (response) => {
-        const body = await response.json() as StatusResponse & { error?: { message?: string } };
-        if (!response.ok) throw new Error(body.error?.message ?? "The walkthrough status could not be loaded.");
-        return body;
-      })
-      .then(async (body) => {
-        if (cancelled) return;
-        setStatus(body);
-        if (body.run && ["NEEDS_REVIEW", "REVIEWED", "REPORT_READY"].includes(body.run.status)) {
-          const reviewResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { cache: "no-store" });
-          const reviewPayload = await reviewResponse.json() as unknown;
-          if (!reviewResponse.ok) {
-            const errorBody = reviewPayload as { error?: { message?: string } };
-            throw new Error(errorBody.error?.message ?? "The findings could not be loaded.");
-          }
-          const reviewBody = WalkthroughReviewSchema.parse(reviewPayload);
-          if (reviewBody.totalCount === 0 && body.run.status === "NEEDS_REVIEW") {
-            const completeResponse = await fetch(`/api/walkthroughs/${walkthroughId}/observations`, { method: "POST" });
-            const completePayload = await completeResponse.json() as unknown;
-            if (!completeResponse.ok) {
-              const errorBody = completePayload as { error?: { message?: string } };
-              throw new Error(errorBody.error?.message ?? "The empty review could not be completed.");
-            }
-            const completeBody = WalkthroughReviewSchema.parse(completePayload);
-            if (!cancelled) {
-              setReview(completeBody);
-              setStatus({ ...body, run: body.run ? { ...body.run, status: "REVIEWED" } : body.run });
-            }
-          } else if (!cancelled) setReview(reviewBody);
-        }
-      })
-      .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : "The walkthrough status could not be loaded."); });
-    return () => { cancelled = true; };
-  }, [walkthroughId]);
-
-  const reportReady = status?.run?.status === "REPORT_READY" || review?.runStatus === "REPORT_READY";
+  const currentStatus = status?.run?.status;
+  const reportReady = currentStatus === "REPORT_READY" || review?.runStatus === "REPORT_READY";
+  const currentStage = stageIndex(currentStatus);
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-6 py-12">
-      <Link href="/" className="text-sm font-semibold text-slate-600 underline">← Back to upload</Link>
-      <div>
-        <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">Walkthrough status</p>
-        <h1 className="mt-1 text-3xl font-semibold">{status?.walkthrough.title ?? "Loading walkthrough…"}</h1>
-      </div>
-      {error && <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
-      {status && <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-sm text-slate-600">Project: <span className="font-medium text-slate-900">{status.walkthrough.project.name}</span></p>
-        <p className="text-sm text-slate-600">Upload: <span className="font-mono text-slate-900">{status.asset.status}</span></p>
-        <p className="text-sm text-slate-600">Processing: <span className="font-mono text-slate-900">{status.run?.status ?? "UPLOAD_PENDING"}</span></p>
-        {status.run?.errorMessage && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{status.run.errorMessage}</p>}
-        {status.run?.failedStep && <p className="text-sm text-slate-600">Failed stage: {status.run.failedStep}</p>}
-        <button type="button" onClick={() => void refresh().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The walkthrough status could not be loaded."))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold">Refresh status</button>
-        {status.run?.status === "REPORT_READY" && status.report && <Link href={`/reports/${status.report.id}` as never} className="inline-block rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">View report</Link>}
-        {status.run?.status === "PROCESSING_FAILED" && <>
-          {status.run.retryable === false && <p className="text-sm text-slate-600">Correct the underlying media or deployment configuration before retrying.</p>}
-          <button type="button" disabled={retrying} onClick={() => void retry()} className="ml-3 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{retrying ? "Retrying…" : "Retry processing"}</button>
-        </>}
+    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-7 px-5 py-8 sm:px-8 sm:py-12">
+      <Link href="/" className="w-fit text-sm font-semibold text-slate-600 underline">← Back to projects</Link>
+      <header className="space-y-2"><p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Walkthrough status</p><h1 className="text-3xl font-semibold text-slate-950 sm:text-4xl">{status?.walkthrough.title ?? "Loading walkthrough…"}</h1>{status && <p className="text-sm text-slate-600">{status.walkthrough.project.name}</p>}</header>
+      {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert"><p>{error}</p><button type="button" onClick={restartPolling} className="mt-2 font-semibold underline">Try again</button></div>}
+      {loading && !status && <p className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600" role="status">Loading walkthrough status…</p>}
+      {status && <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7" aria-labelledby="processing-heading">
+        <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm font-semibold uppercase tracking-wide text-slate-500">Processing</p><h2 id="processing-heading" className="mt-1 text-2xl font-semibold text-slate-950">{processingStatusLabel(currentStatus)}</h2></div><button type="button" onClick={restartPolling} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Refresh status</button></div>
+        <p className="text-sm leading-6 text-slate-600">SiteThread is preparing source-backed findings for you to review. This page updates while processing is active.</p>
+        {currentStatus === "PROCESSING_FAILED" ? <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 p-4"><p className="font-semibold text-red-950">This walkthrough needs attention before findings can be prepared.</p>{status.run?.errorMessage && <p className="text-sm leading-6 text-red-900">{status.run.errorMessage}</p>}{status.run?.failedStep && <p className="text-sm text-red-900">Stage: {processingStatusLabel(status.run.failedStep)}</p>}<div className="flex flex-wrap items-center gap-3"><button type="button" disabled={retrying} onClick={() => void retry()} className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{retrying ? "Retrying…" : "Retry processing"}</button>{status.run?.retryable === false && <span className="text-sm text-red-900">Resolve the underlying issue, then retry.</span>}</div></div> : <ol className="space-y-3" aria-label="Processing stages">{processingStages.map((stage, index) => { const complete = currentStage > index || ["REVIEWED", "REPORT_READY"].includes(currentStatus ?? ""); const active = currentStatus === stage.status || (currentStatus === "UPLOADED" && index === 0); return <li key={stage.status} className={`flex gap-3 rounded-xl border p-3 ${complete ? "border-emerald-200 bg-emerald-50" : active ? "border-slate-300 bg-slate-50" : "border-slate-200"}`}><span aria-hidden="true" className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${complete ? "bg-emerald-700 text-white" : active ? "bg-slate-900 text-white" : "bg-slate-200 text-slate-600"}`}>{complete ? "✓" : index + 1}</span><span><span className="block font-semibold text-slate-950">{stage.label}</span><span className="block text-sm text-slate-600">{active || complete ? stage.detail : "Up next when the previous stage is complete."}</span></span></li>; })}</ol>}
+        <div className="flex flex-wrap gap-3 border-t border-slate-100 pt-4">{currentStatus === "REPORT_READY" && status.report && <Link href={`/reports/${status.report.id}` as never} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">View report</Link>}{currentStatus === "REVIEWED" && review && review.remainingDrafts === 0 && !reportReady && (review.observations.some((observation) => observation.reviewState === "CONFIRMED" || observation.reviewState === "EDITED") ? <button type="button" disabled={generatingReport} onClick={() => void generateReport()} className="rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{generatingReport ? "Preparing reviewed record…" : "Generate report"}</button> : <span className="rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">No findings selected for report.</span>)}</div>
       </section>}
-      {review && status?.run && ["NEEDS_REVIEW", "REVIEWED", "REPORT_READY"].includes(status.run.status) && <FindingReviewPanel review={review} readOnly={reportReady} onReview={reviewObservation} />}
-      {review && status?.run?.status === "REVIEWED" && review.runStatus === "REVIEWED" && !reportReady && review.remainingDrafts === 0 && (
-        review.observations.some((observation) => observation.reviewState === "CONFIRMED" || observation.reviewState === "EDITED")
-          ? <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5"><p className="text-sm text-emerald-900">The review is complete. Generate a reviewed site record from the selected findings.</p><button type="button" disabled={generatingReport} onClick={() => void generateReport()} className="mt-3 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{generatingReport ? "Generating report…" : "Generate report"}</button></section>
-          : <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">No findings selected for report.</p>
-      )}
+      {review && status?.run && isReviewStatus(status.run.status) && <FindingReviewPanel review={review} readOnly={reportReady} onReview={reviewObservation} />}
     </main>
   );
 }
