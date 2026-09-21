@@ -99,7 +99,15 @@ export async function finalizeUpload(walkthroughId: string, storage: MediaStorag
   if (!verified.etag) throw new SiteThreadError("The uploaded media could not be verified yet.", "MEDIA_UNAVAILABLE", true);
   await storage.promoteUpload({ sourceObjectKey: asset.stagingObjectKey, destinationObjectKey: destinationKey, sourceETag: verified.etag, mimeType: asset.mimeType });
   const queued = await database.$transaction(async (tx) => {
-    await tx.mediaAsset.update({ where: { id: asset.id }, data: { status: MediaAssetStatus.AVAILABLE, objectKey: destinationKey, stagingObjectKey: null, byteSize: verified.byteSize } });
+    const claimed = await tx.mediaAsset.updateMany({
+      where: { id: asset.id, status: MediaAssetStatus.PENDING, stagingObjectKey: asset.stagingObjectKey },
+      data: { status: MediaAssetStatus.AVAILABLE, objectKey: destinationKey, stagingObjectKey: null, byteSize: verified.byteSize },
+    });
+    if (claimed.count === 0) {
+      const existingRun = await tx.processingRun.findUnique({ where: { idempotencyKey: `${walkthroughId}:${PIPELINE_VERSION}` } });
+      if (!existingRun) throw new SiteThreadError("The upload finalization state could not be recovered.", "INTERNAL_ERROR");
+      return { id: existingRun.id, walkthroughId: existingRun.walkthroughId, status: existingRun.status };
+    }
     const persistedRun = await tx.processingRun.upsert({
       where: { idempotencyKey: `${walkthroughId}:${PIPELINE_VERSION}` },
       create: { id: randomUUID(), walkthroughId, pipelineVersion: PIPELINE_VERSION, idempotencyKey: `${walkthroughId}:${PIPELINE_VERSION}`, status: "UPLOADED" },

@@ -1,5 +1,6 @@
 import { ProcessingStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db/client";
+import { logEvent } from "@/lib/observability/log";
 import type { ProcessingJob } from "./types";
 
 export const PIPELINE_VERSION = "mvp-upload-v1";
@@ -60,6 +61,7 @@ export async function retryProcessingRun(runId: string, database: Prisma.Transac
     data: { status: "QUEUED", retryCount: { increment: 1 }, failedStep: null, errorCode: null, errorMessage: null, retryable: null },
   });
   const updated = await database.processingRun.findUniqueOrThrow({ where: { id: runId } });
+  logEvent("processing.retry.requested", { processingRunId: updated.id, walkthroughId: updated.walkthroughId, pipelineVersion: updated.pipelineVersion, retryCount: updated.retryCount, stage: current.failedStep ?? "unknown" });
   return { id: updated.id, walkthroughId: updated.walkthroughId, status: updated.status };
 }
 

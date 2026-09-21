@@ -57,7 +57,14 @@ describe("walkthrough upload service", () => {
     let deleteCount = 0;
     const database = {
       walkthrough: { findUnique: async () => ({ id: "walk-1", mediaAssets: [asset], processingRuns: run ? [run] : [] }) },
-      mediaAsset: { update: async ({ data }: { data: Partial<typeof asset> }) => Object.assign(asset, data) },
+      mediaAsset: {
+        update: async ({ data }: { data: Partial<typeof asset> }) => Object.assign(asset, data),
+        updateMany: async ({ where, data }: { where: { id: string; status: string; stagingObjectKey: string }; data: Partial<typeof asset> }) => {
+          if (asset.id !== where.id || asset.status !== where.status || asset.stagingObjectKey !== where.stagingObjectKey) return { count: 0 };
+          Object.assign(asset, data);
+          return { count: 1 };
+        },
+      },
       processingRun: {
         upsert: async ({ create }: { create: FakeRun }) => { if (!run) { const created = create; run = { id: created.id, walkthroughId: created.walkthroughId, pipelineVersion: created.pipelineVersion, idempotencyKey: created.idempotencyKey, status: created.status, retryCount: 0, failedStep: null, errorCode: null, errorMessage: null, updatedAt: new Date() }; } return run; },
         findUnique: async () => run,

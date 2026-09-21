@@ -12,6 +12,7 @@ import { extractAudioWindow, extractVisualClip, probeDuration } from "@/lib/medi
 import { r2MediaStorage } from "@/lib/storage/r2";
 import type { ProcessingMediaStorage } from "@/lib/storage/types";
 import { extractObservations } from "@/lib/reasoning/extract";
+import { logEvent, safeIdHash } from "@/lib/observability/log";
 import type { ObservationReasoner } from "@/lib/reasoning/types";
 import { providerEventSourceRange, audioWindows, visualClips, type SourceRange } from "./selection";
 import { failProcessingRunIfCurrent, transitionProcessingRun } from "./lifecycle";
@@ -41,6 +42,7 @@ async function saveInvocation(database: Prisma.TransactionClient | typeof db, ru
     create: { processingRunId: runId, idempotencyKey: diagnostic.idempotencyKey, provider: diagnostic.provider, capability: diagnostic.capability, stage, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, status: "SUCCEEDED", rawResponse, latencyMs: diagnostic.latencyMs },
     update: { status: "SUCCEEDED", rawResponse, latencyMs: diagnostic.latencyMs, errorCode: null, retryable: null },
   });
+  logEvent("provider.invocation.completed", { processingRunId: runId, stage, capability: diagnostic.capability, provider: diagnostic.provider, latencyMs: diagnostic.latencyMs, outcome: "succeeded", keyHash: safeIdHash(diagnostic.idempotencyKey) });
   return invocation.id;
 }
 
@@ -61,6 +63,7 @@ export async function processWalkthrough(
   const media = dependencies.media ?? ffmpegTools;
   const run = await database.processingRun.findUnique({ where: { id: runId }, include: { walkthrough: { include: { mediaAssets: true } } } });
   if (!run) throw new SiteThreadError("The processing run was not found.", "NOT_FOUND");
+  logEvent("processing.run.started", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, status: run.status, retryCount: run.retryCount });
   if (run.status === "EXTRACTING_OBSERVATIONS") {
     try {
       await extractObservations(runId, { database, reasoner: dependencies.reasoner });
@@ -82,6 +85,7 @@ export async function processWalkthrough(
   const source = run.walkthrough.mediaAssets.find((asset) => asset.kind === MediaAssetKind.SOURCE_VIDEO && asset.status === MediaAssetStatus.AVAILABLE);
   let directory: string | undefined;
   let stage: ProcessingStatus = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
+  logEvent("processing.stage.started", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, stage });
   try {
     if (!source) throw new SiteThreadError("The private source walkthrough is unavailable.", "MEDIA_UNAVAILABLE");
     const provider = dependencies.provider ?? configuredMediaProvider();
@@ -129,6 +133,7 @@ export async function processWalkthrough(
     }
 
     stage = "ANALYZING_MEDIA";
+    logEvent("processing.stage.started", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, stage });
     if (run.status !== "ANALYZING_MEDIA") await transitionProcessingRun(runId, "ANALYZING_MEDIA", {}, database);
     const transcript = await database.transcriptSegment.findMany({ where: { walkthroughId: run.walkthroughId, processingRunId: runId }, orderBy: { sequence: "asc" } });
     const clips = visualClips(duration, transcript.map(({ startSeconds, endSeconds, text }) => ({ startSeconds, endSeconds, text })));
@@ -176,10 +181,12 @@ export async function processWalkthrough(
       });
     }
     stage = "EXTRACTING_OBSERVATIONS";
+    logEvent("processing.stage.started", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, stage });
     await transitionProcessingRun(runId, "EXTRACTING_OBSERVATIONS", {}, database);
     await extractObservations(runId, { database, reasoner: dependencies.reasoner });
   } catch (error) {
     const safe = serializeError(error);
+    logEvent("processing.run.failed", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, stage, errorCode: safe.code, retryable: safe.retryable });
     await failProcessingRunIfCurrent(runId, stage, { failedStep: stage, errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
     throw new SiteThreadError(safe.message, safe.code, safe.retryable);
   } finally {
