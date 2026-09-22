@@ -44,6 +44,11 @@ export interface MediaIntelligenceProvider {
   analyzeVisual(input: VisualAnalysisInput): Promise<ProviderResult<ProviderVisionResult>>;
 }
 
+export interface ProviderAttribution {
+  provider: string;
+  capability: string;
+}
+
 export interface TranscriptionProvider {
   discoverCapabilities(): Promise<MediaCapabilities>;
   transcribe(input: TranscriptionInput): Promise<ProviderResult<ProviderTranscriptResult>>;

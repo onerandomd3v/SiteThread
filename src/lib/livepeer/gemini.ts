@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ProviderVisionResultSchema } from "@/lib/schemas/provider";
-import { ProviderCallError } from "./provider-errors";
+import { ProviderCallError, withProviderAttribution } from "./provider-errors";
 import { sanitizeProviderResponse } from "./sanitize";
 import type { ProviderResult, VisualAnalysisInput, VisualSemanticProvider } from "./types";
 
@@ -93,6 +93,14 @@ export class GeminiVisualSemanticProvider implements VisualSemanticProvider {
   ) {}
 
   async analyzeVisual(input: VisualAnalysisInput): Promise<ProviderResult<z.infer<typeof ProviderVisionResultSchema>>> {
+    try {
+      return await this.analyzeVisualInternal(input);
+    } catch (error) {
+      throw withProviderAttribution(error, { provider: "google-gemini", capability: "gemini-video-understanding" });
+    }
+  }
+
+  private async analyzeVisualInternal(input: VisualAnalysisInput): Promise<ProviderResult<z.infer<typeof ProviderVisionResultSchema>>> {
     const started = Date.now();
     let mediaResponse: Response;
     try {

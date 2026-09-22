@@ -5,7 +5,7 @@ import { ProviderTranscriptResultSchema, ProviderVisionResultSchema } from "@/li
 import { FixtureMediaIntelligenceProvider } from "./fixture";
 import { sanitizeProviderResponse, sanitizeResultText } from "./sanitize";
 import type { MediaCapabilities, MediaIntelligenceProvider, ProviderResult, TranscriptionInput, TranscriptionProvider, VisualAnalysisInput, VisualSemanticProvider } from "./types";
-import { ProviderCallError } from "./provider-errors";
+import { ProviderCallError, withProviderAttribution } from "./provider-errors";
 import { configuredCreativeTranscriptionProvider } from "./creative";
 import { GEMINI_DEFAULT_MODEL, GeminiVisualSemanticProvider } from "./gemini";
 
@@ -170,13 +170,21 @@ export class LivepeerMediaIntelligenceProvider implements MediaIntelligenceProvi
   }
 
   async transcribe(input: TranscriptionInput) {
-    const result = await this.runCapability("nemotron-asr", { capability: "nemotron-asr", source_url: input.audioUrl, inputs: { audio_url: input.audioUrl, language: "en-US" }, async: false, timeout: 60, persist: false, session_id: input.walkthroughId, idempotency_key: input.idempotencyKey }, input.idempotencyKey, 90_000);
-    return { ...result, value: ProviderTranscriptResultSchema.parse({ text: result.value.text }) };
+    try {
+      const result = await this.runCapability("nemotron-asr", { capability: "nemotron-asr", source_url: input.audioUrl, inputs: { audio_url: input.audioUrl, language: "en-US" }, async: false, timeout: 60, persist: false, session_id: input.walkthroughId, idempotency_key: input.idempotencyKey }, input.idempotencyKey, 90_000);
+      return { ...result, value: ProviderTranscriptResultSchema.parse({ text: result.value.text }) };
+    } catch (error) {
+      throw withProviderAttribution(error, { provider: "livepeer", capability: "nemotron-asr" });
+    }
   }
 
   async analyzeVisual(input: VisualAnalysisInput) {
-    const result = await this.runCapability("marlin-video", { capability: "marlin-video", prompt: VISUAL_PROMPT, inputs: { video_url: input.mediaUrl, do_sample: false, max_tokens: 250 }, async: false, timeout: 260, persist: false, session_id: input.walkthroughId, idempotency_key: input.idempotencyKey }, input.idempotencyKey, 300_000);
-    return { ...result, value: ProviderVisionResultSchema.parse({ text: result.value.text, eventRange: result.value.eventRange }) };
+    try {
+      const result = await this.runCapability("marlin-video", { capability: "marlin-video", prompt: VISUAL_PROMPT, inputs: { video_url: input.mediaUrl, do_sample: false, max_tokens: 250 }, async: false, timeout: 260, persist: false, session_id: input.walkthroughId, idempotency_key: input.idempotencyKey }, input.idempotencyKey, 300_000);
+      return { ...result, value: ProviderVisionResultSchema.parse({ text: result.value.text, eventRange: result.value.eventRange }) };
+    } catch (error) {
+      throw withProviderAttribution(error, { provider: "livepeer", capability: "marlin-video" });
+    }
   }
 }
 

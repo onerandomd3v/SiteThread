@@ -7,7 +7,7 @@ import { SiteThreadError } from "@/lib/errors";
 import { ProviderTranscriptResultSchema } from "@/lib/schemas/provider";
 import { sanitizeProviderResponse } from "./sanitize";
 import type { MediaCapabilities, ProviderResult, SafeJson, TranscriptionInput, TranscriptionProvider } from "./types";
-import { ProviderCallError } from "./provider-errors";
+import { ProviderCallError, withProviderAttribution } from "./provider-errors";
 
 export const CREATIVE_MCP_ENDPOINT = "https://agent.livepeer.org/api/mcp/creative";
 export const CREATIVE_TRANSCRIBE_CAPABILITY = "creative/transcribe";
@@ -173,7 +173,7 @@ export class CreativeTranscriptionProvider implements TranscriptionProvider {
       if (transcribeDispatched && classified.code !== "PROVIDER_RESULT_INVALID") {
         throw new ProviderCallError("Livepeer creative transcription delivery is uncertain; no automatic paid retry was attempted.", "PROVIDER_UNCERTAIN_DELIVERY", false, classified.rawResponse);
       }
-      throw classified;
+      throw withProviderAttribution(classified, { provider: "livepeer", capability: CREATIVE_TRANSCRIBE_CAPABILITY });
     } finally {
       await session?.close().catch(() => undefined);
     }
