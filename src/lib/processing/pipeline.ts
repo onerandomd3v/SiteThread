@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MediaAssetKind, MediaAssetStatus, Prisma, type ProcessingStatus } from "@prisma/client";
 import { db } from "@/lib/db/client";
 import { SiteThreadError, serializeError } from "@/lib/errors";
-import type { MediaIntelligenceProvider, ProviderDiagnostic, TranscriptionProvider, VisualSemanticProvider } from "@/lib/livepeer/types";
+import { VISUAL_SEMANTIC_CAPABILITY, type MediaIntelligenceProvider, type ProviderAttribution, type ProviderDiagnostic, type TranscriptionProvider, type VisualSemanticProvider } from "@/lib/livepeer/types";
 import { configuredVisualSemanticProvider, configuredTranscriptionProvider, ProviderCallError } from "@/lib/livepeer/provider";
 import { sanitizeProviderResponse } from "@/lib/livepeer/sanitize";
 import { extractAudioWindow, extractVisualClip, probeDuration } from "@/lib/media/ffmpeg";
@@ -39,17 +39,21 @@ async function saveInvocation(database: Prisma.TransactionClient | typeof db, ru
   const invocation = await database.providerInvocation.upsert({
     where: { idempotencyKey: diagnostic.idempotencyKey },
     create: { processingRunId: runId, idempotencyKey: diagnostic.idempotencyKey, provider: diagnostic.provider, capability: diagnostic.capability, stage, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, status: "SUCCEEDED", rawResponse, latencyMs: diagnostic.latencyMs },
-    update: { status: "SUCCEEDED", rawResponse, latencyMs: diagnostic.latencyMs, errorCode: null, retryable: null },
+    update: { status: "SUCCEEDED", provider: diagnostic.provider, capability: diagnostic.capability, rawResponse, latencyMs: diagnostic.latencyMs, errorCode: null, retryable: null },
   });
   return invocation.id;
 }
 
-async function saveProviderFailure(database: typeof db, runId: string, stage: string, range: SourceRange, capability: string, idempotencyKey: string, error: ProviderCallError): Promise<void> {
+async function saveProviderFailure(database: typeof db, runId: string, stage: string, range: SourceRange, attribution: ProviderAttribution, idempotencyKey: string, error: ProviderCallError): Promise<void> {
   await database.providerInvocation.upsert({
     where: { idempotencyKey },
-    create: { processingRunId: runId, idempotencyKey, provider: "livepeer", capability, stage, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, status: "FAILED", errorCode: error.code, retryable: error.retryable, rawResponse: (error.rawResponse ?? {}) as Prisma.InputJsonValue },
-    update: { status: "FAILED", errorCode: error.code, retryable: error.retryable, rawResponse: (error.rawResponse ?? {}) as Prisma.InputJsonValue },
+    create: { processingRunId: runId, idempotencyKey, provider: attribution.provider, capability: attribution.capability, stage, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, status: "FAILED", errorCode: error.code, retryable: error.retryable, rawResponse: (error.rawResponse ?? {}) as Prisma.InputJsonValue },
+    update: { status: "FAILED", provider: attribution.provider, capability: attribution.capability, errorCode: error.code, retryable: error.retryable, rawResponse: (error.rawResponse ?? {}) as Prisma.InputJsonValue },
   });
+}
+
+function failureAttribution(error: ProviderCallError, fallbackCapability: string): ProviderAttribution {
+  return error.attribution ?? { provider: "unknown", capability: fallbackCapability };
 }
 
 export async function processWalkthrough(
@@ -114,7 +118,7 @@ export async function processWalkthrough(
         try {
           result = await transcriptionProvider.transcribe({ walkthroughId: run.walkthroughId, audioUrl, idempotencyKey });
         } catch (error) {
-          if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, transcriptionCapability, idempotencyKey, error);
+          if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, failureAttribution(error, transcriptionCapability), idempotencyKey, error);
           throw error;
         }
         await database.$transaction(async (tx) => {
@@ -160,13 +164,13 @@ export async function processWalkthrough(
         }
       }
       if (!clipAsset.durationSeconds || !Number.isFinite(clipAsset.durationSeconds)) throw new SiteThreadError("The visual clip duration is unavailable.", "MEDIA_UNAVAILABLE");
-      const idempotencyKey = providerInvocationKey(runId, run.pipelineVersion, stage, "marlin-video", range);
+      const idempotencyKey = providerInvocationKey(runId, run.pipelineVersion, stage, VISUAL_SEMANTIC_CAPABILITY, range);
       const mediaUrl = await storage.createReadUrl({ assetId: clipAsset.objectKey, expiresInSeconds: SIGNED_READ_SECONDS });
       let result;
       try {
         result = await visualProvider.analyzeVisual({ walkthroughId: run.walkthroughId, mediaUrl, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, idempotencyKey });
       } catch (error) {
-        if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, "marlin-video", idempotencyKey, error);
+        if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, failureAttribution(error, VISUAL_SEMANTIC_CAPABILITY), idempotencyKey, error);
         throw error;
       }
       const eventRange = providerEventSourceRange(range, result.value.eventRange, duration, clipAsset.durationSeconds);

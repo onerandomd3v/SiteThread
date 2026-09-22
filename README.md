@@ -38,7 +38,7 @@ Findings remain traceable to their source where available, including transcript 
 
 ## Livepeer
 
-Livepeer's official creative MCP is used for bounded transcription only. SiteThread creates six-second FFmpeg windows, gives the creative `transcribe` tool a short-lived private R2 URL, and retains its own source-window bounds because provider timing may be absent. Visual semantics and strict observation reasoning remain separate runtime dependencies; the application must not claim Nemotron, Marlin, or Gemini service execution without returned metadata.
+Livepeer's official creative MCP is used for bounded transcription. SiteThread creates six-second FFmpeg windows, gives the creative `transcribe` tool a short-lived private R2 URL, and retains its own source-window bounds because provider timing may be absent. Live visual semantics use a separate Google Gemini adapter over the existing provider seam; strict observation reasoning remains separate, and the application must not claim a provider/model without returned metadata.
 
 See the [Livepeer integration and technical spike](docs/livepeer-integration.md) for the detailed integration decisions, provider boundaries, capability validation, and processing strategy.
 

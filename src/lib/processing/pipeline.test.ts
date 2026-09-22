@@ -4,6 +4,7 @@ import { ProviderCallError } from "@/lib/livepeer/provider";
 import type { MediaIntelligenceProvider } from "@/lib/livepeer/types";
 import type { ProcessingMediaStorage } from "@/lib/storage/types";
 import type { ObservationReasoner } from "@/lib/reasoning/types";
+import { VISUAL_SEMANTIC_CAPABILITY } from "@/lib/livepeer/types";
 import { retryProcessingRun } from "./lifecycle";
 import { processWalkthrough, providerInvocationKey, type ProcessingMediaTools } from "./pipeline";
 
@@ -12,7 +13,7 @@ vi.mock("@/lib/livepeer/creative", () => ({
   configuredCreativeTranscriptionProvider: () => { throw new Error("creative MCP must not be constructed in fixture mode"); },
 }));
 
-function scenario(failVisualOnce = false) {
+function scenario(failVisualOnce = false, failTranscription = false) {
   const source = { id: "source", walkthroughId: "walk", kind: "SOURCE_VIDEO", status: "AVAILABLE", objectKey: "private/source.mp4", mimeType: "video/mp4", byteSize: 1000, durationSeconds: null as number | null };
   const assets = new Map<string, Record<string, unknown>>([[source.id, source]]);
   const run = { id: "run", walkthroughId: "walk", pipelineVersion: "mvp-upload-v1", status: "QUEUED", retryCount: 0, failedStep: null as string | null, errorCode: null as string | null, errorMessage: null as string | null };
@@ -92,13 +93,14 @@ function scenario(failVisualOnce = false) {
     discoverCapabilities: async () => { capabilityDiscoveries += 1; return { discoveredAt: new Date(), requirements: { TRANSCRIPTION: { capabilityId: "nemotron-asr", modelId: "fixture" }, VISION: { capabilityId: "marlin-video", modelId: "fixture" } } }; },
     transcribe: async ({ idempotencyKey }) => {
       providerKeys.push(idempotencyKey);
+      if (failTranscription) throw new ProviderCallError("Transcription unavailable.", "PROVIDER_UNAVAILABLE", true, {}, { provider: "livepeer", capability: "creative/transcribe" });
       return { value: { text: `Narration ${providerKeys.length}` }, diagnostic: { provider: "fixture", capability: "nemotron-asr", idempotencyKey, rawResponse: { source_url: "https://private.example/secret", text: "spoken" }, latencyMs: 1 } };
     },
     analyzeVisual: async ({ idempotencyKey }) => {
       providerKeys.push(idempotencyKey);
       visualCalls += 1;
-      if (failVisualOnce && visualCalls === 1) throw new ProviderCallError("Provider unavailable.", "PROVIDER_UNAVAILABLE", true, { source_url: "https://private.example/secret" });
-      return { value: { text: "Visible condition", eventRange: { startSeconds: 1, endSeconds: 3 } }, diagnostic: { provider: "fixture", capability: "marlin-video", idempotencyKey, rawResponse: { video_url: "https://private.example/secret", text: "visible" }, latencyMs: 2 } };
+      if (failVisualOnce && visualCalls === 1) throw new ProviderCallError("Provider unavailable.", "PROVIDER_UNAVAILABLE", true, { source_url: "https://private.example/secret" }, { provider: "google-gemini", capability: "gemini-video-understanding" });
+      return { value: { text: "Visible condition", eventRange: { startSeconds: 1, endSeconds: 3 } }, diagnostic: { provider: failVisualOnce ? "google-gemini" : "fixture", capability: failVisualOnce ? "gemini-video-understanding" : "marlin-video", idempotencyKey, rawResponse: { video_url: "https://private.example/secret", text: "visible" }, latencyMs: 2 } };
     },
   };
   const reasoner: ObservationReasoner = {
@@ -137,8 +139,15 @@ describe("COD-17 processing pipeline", () => {
     expect(state.candidates.size).toBe(1);
     expect(state.providerKeys).toHaveLength(4);
     expect(state.providerKeys[2]).toBe(state.providerKeys[3]);
-    expect(providerInvocationKey("run", "mvp-upload-v1", "ANALYZING_MEDIA", "marlin-video", { startSeconds: 0, endSeconds: 6 })).toBe(state.providerKeys[2]);
+    expect(providerInvocationKey("run", "mvp-upload-v1", "ANALYZING_MEDIA", VISUAL_SEMANTIC_CAPABILITY, { startSeconds: 0, endSeconds: 6 })).toBe(state.providerKeys[2]);
     expect(state.providerKeys[2]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+    expect(state.invocations.get(state.providerKeys[2])).toMatchObject({ provider: "google-gemini", capability: "gemini-video-understanding", status: "SUCCEEDED" });
+  });
+
+  it("attributes transcription failures to Livepeer without vendor assumptions in the pipeline", async () => {
+    const state = scenario(false, true);
+    await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+    expect(state.invocations.get(state.providerKeys[0])).toMatchObject({ provider: "livepeer", capability: "creative/transcribe", status: "FAILED" });
   });
 
   it("keeps transcript windows from another pipeline run and resumes a redelivered worker", async () => {
