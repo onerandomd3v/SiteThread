@@ -143,6 +143,15 @@ describe("observation reasoner", () => {
     await expect(provider.extract(input)).resolves.toMatchObject({ value: { observations: [] } });
   });
 
+  it("rejects an empty provider response", async () => {
+    const { provider } = mockedProvider("");
+    await expect(provider.extract(input)).rejects.toMatchObject({
+      code: "PROVIDER_RESULT_INVALID",
+      retryable: false,
+      attribution: { provider: "google-gemini", capability: "observation-reasoning" },
+    });
+  });
+
   it("can return an empty result when the evidence bundle is empty", async () => {
     const { provider, requests } = mockedProvider(JSON.stringify({ observations: [] }));
     await expect(provider.extract({ idempotencyKey: "empty-evidence-key", evidence: [] })).resolves.toMatchObject({ value: { observations: [] } });
