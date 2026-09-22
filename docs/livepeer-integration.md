@@ -4,15 +4,25 @@
 >
 > **Validation dates:** 2026-09-17 UTC (COD-14); 2026-09-17 UTC / 2026-09-18 local (COD-32)
 >
-> **Status:** COD-32 selects deterministic FFmpeg-windowed transcription and synchronous short-clip visual analysis. Production bearer ownership, signed-R2 fetches, and construction-domain quality remain deployment validation gates.
+> **Status:** COD-176 selects the official creative MCP for bounded transcription only. Visual-semantic and strict observation-reasoning providers remain explicit unresolved runtime dependencies.
 >
 > **Scope:** Integration decision and validation findings. No COD-17 pipeline implementation.
 
 ## Final integration decision
 
-Use **Livepeer raw MCP over Streamable HTTP**, at the path-pinned `https://agent.livepeer.org/api/mcp/raw`, behind the SiteThread-owned `MediaIntelligenceProvider` in the Trigger.dev worker. Keep capability discovery, transport, authentication, result validation, and error classification inside `src/lib/livepeer/`.
+The earlier COD-32 raw-MCP decision remains historical. The current hackathon path uses `https://agent.livepeer.org/api/mcp/creative` through the SiteThread-owned transcription boundary in the Trigger.dev worker. The creative SDK client sends no Authorization header, performs pricing/balance preflight, uses short-lived signed R2 URLs, and closes each MCP session.
 
-COD-32 freezes two narrow media contracts for COD-17. Transcription uses exact six-second FFmpeg source windows and synchronous `nemotron-asr`; SiteThread supplies the trustworthy window start/end because raw MCP did not preserve native ASR timestamps. Visual analysis uses bounded six-second H.264/AAC clips and synchronous `marlin-video`; the complete clip range is the durable evidence range, while model-proposed subranges remain untrusted hints. Direct image analysis is not selected. Marlin's async text-job wrapper failed in all three current probes, so COD-17 must not use that polling route for visual results.
+COD-176 freezes one proven live contract: exact six-second FFmpeg source windows sent to creative `transcribe` with `granularity: "segment"`. Returned text is normalized without manufacturing cues, SRT, or provider timestamps; SiteThread's original window remains authoritative. `find_moments` is not part of the live path, and no validated creative async semantic-video route exists. Visual semantics and ObservationReasoner execution are therefore not silently substituted or attributed to Livepeer.
+
+### COD-176 responsibility split
+
+```text
+Creative MCP transcribe → bounded transcript text
+FFmpeg + private R2   → deterministic derivatives and evidence assets
+Separate visual provider → unresolved runtime dependency
+Separate reasoner       → unresolved runtime dependency
+SiteThread              → source ranges, provenance, idempotency, review, reports
+```
 
 **COD-17 is implementation-safe** under the explicit contract in this document. That statement authorizes provider implementation, fixtures, orchestration, and normalization; it is not a production-readiness claim. An issued Livepeer bearer, a live signed-R2 fetch, representative owned construction media, and the resulting latency/cost rehearsal must pass before the live demo or production mode is considered ready.
 
@@ -140,7 +150,7 @@ Map the selected synchronous lifecycle into existing processing states as follow
 | Retryable transport/provider failure while attempts remain | Keep the current stage and increment `retryCount` |
 | Nonretryable failure, invalid result, exhausted attempts, or whole-stage deadline | `PROCESSING_FAILED` with `failedStep`, stable error code, safe message, and retry count |
 
-The COD-17 adapter contract is therefore: raw MCP `/api/mcp/raw`; protocol `2024-11-05` initialization as currently accepted; optional transport session support but no assumed session header; issued bearer required in production; six-second WAV windows to synchronous `nemotron-asr`; up to six six-second H.264/AAC clips to synchronous `marlin-video`; SiteThread-owned source ranges; result-text validation; same-key recovery for uncertain delivery; and no public upload or provider substitution.
+The COD-176 transcription adapter contract is therefore: creative MCP `/api/mcp/creative`; protocol `2024-11-05`; no Authorization header; bounded SDK connection/request lifetime; pricing/balance preflight; six-second SiteThread-owned windows; result-text validation; same-key application idempotency; no signed-URL persistence/logging; and no provider/model substitution. The legacy raw adapter remains isolated and is not selected by the hackathon live factory.
 
 ## COD-14 runtime baseline
 
@@ -295,7 +305,7 @@ The current [Get Started page][get-started] recommends a lean tool profile and a
 
 The page's 9-tool lean / approximately 99-tool full description differs from the live dedicated raw surface. Its printed profile header contains a space in the header name (`X-Livepeer Agent-Tool-Profile`), so it cannot be copied literally as a standards-compliant HTTP header. The tested client used the dedicated raw endpoint without that header. Confirm any current profile override spelling with Livepeer rather than inventing it.
 
-The live identity also advertises `/api/mcp/creative` and `/api/mcp/full`. SiteThread needs exact dispatch, so it should use raw rather than the creative planner. These sibling surfaces were not tested. The identity's `/docs/mcp` link returned 404.
+The live identity also advertises `/api/mcp/creative` and `/api/mcp/full`. COD-176 uses the tested creative surface for bounded transcription. The full surface is not selected. The identity's `/docs/mcp` link returned 404.
 
 The discovered tool schemas state:
 
@@ -307,15 +317,14 @@ The discovered tool schemas state:
 - `persist: true` can add a storage copy/cost. All inference tests used `persist: false`; upload hosting is a separate operation.
 - `cancel_job` does not guarantee cancellation or refund of work already executing upstream.
 
-For future server/worker configuration, use:
+For current creative transcription worker configuration, use:
 
 ```text
-LIVEPEER_MCP_URL=https://agent.livepeer.org/api/mcp/raw
-LIVEPEER_MCP_BEARER=<secret supplied through the runtime environment>
+LIVEPEER_CREATIVE_MCP_URL=https://agent.livepeer.org/api/mcp/creative
 MEDIA_PROVIDER_MODE=live
 ```
 
-These are proposed SiteThread environment names, matching the workshop's endpoint/bearer convention. The probe omitted the bearer entirely. Use `Authorization: Bearer <key>` for authenticated HTTP requests; never expose it through `NEXT_PUBLIC_*`. Keep fixture mode explicitly separate, with no automatic switch after a live failure. Production credentials and their account-specific limits must be validated before the demo deployment.
+`LIVEPEER_MCP_URL` and `LIVEPEER_MCP_BEARER` remain optional legacy-adapter settings and are not required by the creative path. The creative SDK client intentionally sends no Authorization header. Keep fixture mode explicitly separate, with no automatic switch after a live failure. Production credentials and their account-specific limits must be validated before the demo deployment.
 
 ### Direct HTTP contract
 

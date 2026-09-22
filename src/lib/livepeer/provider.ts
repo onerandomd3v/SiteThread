@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { parseServerEnv } from "@/lib/config/env";
-import { SiteThreadError, type SiteThreadErrorCode } from "@/lib/errors";
+import { SiteThreadError } from "@/lib/errors";
 import { ProviderTranscriptResultSchema, ProviderVisionResultSchema } from "@/lib/schemas/provider";
 import { FixtureMediaIntelligenceProvider } from "./fixture";
 import { sanitizeProviderResponse, sanitizeResultText } from "./sanitize";
-import type { MediaCapabilities, MediaIntelligenceProvider, ProviderResult, SafeJson, TranscriptionInput, VisualAnalysisInput } from "./types";
+import type { MediaCapabilities, MediaIntelligenceProvider, ProviderResult, TranscriptionInput, VisualAnalysisInput, VisualSemanticProvider } from "./types";
+import { ProviderCallError } from "./provider-errors";
 
 const PROTOCOL = "2024-11-05";
 const LIVEPEER_MCP_ORIGIN = "https://agent.livepeer.org";
@@ -16,13 +17,7 @@ const rpcEnvelope = z.object({ jsonrpc: z.literal("2.0"), result: z.unknown().op
 const toolEnvelope = z.object({ isError: z.boolean().optional(), structuredContent: z.unknown().optional() }).passthrough();
 const capabilityOutput = z.object({ ok: z.literal(true), capability: z.string(), output_kind: z.literal("text"), result: z.object({ text: z.string().trim().min(1) }).passthrough(), status: z.string().optional() }).passthrough();
 
-export class ProviderCallError extends SiteThreadError {
-  readonly rawResponse: SafeJson;
-  constructor(message: string, code: SiteThreadErrorCode, retryable: boolean, rawResponse: unknown = null) {
-    super(message, code, retryable);
-    this.rawResponse = sanitizeProviderResponse(rawResponse);
-  }
-}
+export { ProviderCallError } from "./provider-errors";
 
 function classifyProviderFailure(payload: unknown): ProviderCallError {
   const value = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
@@ -187,5 +182,17 @@ export function configuredMediaProvider(): MediaIntelligenceProvider {
   const env = parseServerEnv();
   if (env.MEDIA_PROVIDER_MODE === "fixture") return new FixtureMediaIntelligenceProvider();
   if (process.env.NODE_ENV === "production" && !env.LIVEPEER_MCP_BEARER) throw new SiteThreadError("Livepeer production credentials are not configured.", "PROVIDER_AUTH");
+  if (!env.LIVEPEER_MCP_URL) throw new SiteThreadError("The legacy raw Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
   return new LivepeerMediaIntelligenceProvider(env.LIVEPEER_MCP_URL, env.LIVEPEER_MCP_BEARER);
+}
+
+/**
+ * The old raw Livepeer visual adapter remains isolated for historical tests and review.
+ * The hackathon creative path has no validated visual-semantic provider, so it must fail
+ * explicitly instead of silently falling back or claiming Marlin execution.
+ */
+export function configuredVisualSemanticProvider(): VisualSemanticProvider {
+  const env = parseServerEnv();
+  if (env.MEDIA_PROVIDER_MODE === "fixture") return new FixtureMediaIntelligenceProvider();
+  throw new ProviderCallError("A separate visual-semantic provider is not configured for the creative MCP path.", "PROVIDER_CONTRACT_UNRESOLVED", false);
 }

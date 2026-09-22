@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { MediaAssetKind, MediaAssetStatus, Prisma, type ProcessingStatus } from "@prisma/client";
 import { db } from "@/lib/db/client";
 import { SiteThreadError, serializeError } from "@/lib/errors";
-import type { MediaIntelligenceProvider, ProviderDiagnostic } from "@/lib/livepeer/types";
-import { configuredMediaProvider, ProviderCallError } from "@/lib/livepeer/provider";
+import type { MediaIntelligenceProvider, ProviderDiagnostic, TranscriptionProvider, VisualSemanticProvider } from "@/lib/livepeer/types";
+import { configuredCreativeTranscriptionProvider } from "@/lib/livepeer/creative";
+import { configuredVisualSemanticProvider, ProviderCallError } from "@/lib/livepeer/provider";
 import { sanitizeProviderResponse } from "@/lib/livepeer/sanitize";
 import { extractAudioWindow, extractVisualClip, probeDuration } from "@/lib/media/ffmpeg";
 import { r2MediaStorage } from "@/lib/storage/r2";
@@ -14,6 +15,7 @@ import type { ProcessingMediaStorage } from "@/lib/storage/types";
 import { extractObservations } from "@/lib/reasoning/extract";
 import type { ObservationReasoner } from "@/lib/reasoning/types";
 import { providerEventSourceRange, audioWindows, visualClips, type SourceRange } from "./selection";
+import { CREATIVE_TRANSCRIBE_CAPABILITY } from "@/lib/livepeer/creative";
 import { failProcessingRunIfCurrent, transitionProcessingRun } from "./lifecycle";
 
 const SIGNED_READ_SECONDS = 15 * 60;
@@ -54,7 +56,7 @@ async function saveProviderFailure(database: typeof db, runId: string, stage: st
 
 export async function processWalkthrough(
   runId: string,
-  dependencies: { database?: typeof db; storage?: ProcessingMediaStorage; provider?: MediaIntelligenceProvider; media?: ProcessingMediaTools; reasoner?: ObservationReasoner } = {},
+  dependencies: { database?: typeof db; storage?: ProcessingMediaStorage; provider?: MediaIntelligenceProvider; transcriptionProvider?: TranscriptionProvider; visualProvider?: VisualSemanticProvider; media?: ProcessingMediaTools; reasoner?: ObservationReasoner } = {},
 ): Promise<void> {
   const database = dependencies.database ?? db;
   const storage = dependencies.storage ?? r2MediaStorage;
@@ -84,7 +86,8 @@ export async function processWalkthrough(
   let stage: ProcessingStatus = run.status === "ANALYZING_MEDIA" ? "ANALYZING_MEDIA" : "TRANSCRIBING";
   try {
     if (!source) throw new SiteThreadError("The private source walkthrough is unavailable.", "MEDIA_UNAVAILABLE");
-    const provider = dependencies.provider ?? configuredMediaProvider();
+    const legacyProvider = dependencies.provider;
+    const transcriptionProvider = dependencies.transcriptionProvider ?? legacyProvider ?? configuredCreativeTranscriptionProvider();
     directory = await mkdtemp(join(tmpdir(), "sitethread-media-"));
     const sourcePath = join(directory, "source.mp4");
     await storage.downloadToFile({ objectKey: source.objectKey, filePath: sourcePath });
@@ -94,7 +97,7 @@ export async function processWalkthrough(
       database.mediaAsset.update({ where: { id: source.id }, data: { durationSeconds: duration } }),
     ]);
     const windows = audioWindows(duration);
-    await provider.discoverCapabilities();
+    await transcriptionProvider.discoverCapabilities();
 
     for (const [sequence, range] of (run.status === "ANALYZING_MEDIA" ? [] : windows).entries()) {
       const identity = { processingRunId: runId, sourceAssetId: source.id, startSeconds: range.startSeconds, endSeconds: range.endSeconds };
@@ -102,16 +105,16 @@ export async function processWalkthrough(
       if (existing?.processingRunId === runId && existing.sourceAssetId === source.id && existing.startSeconds === range.startSeconds && existing.endSeconds === range.endSeconds && existing.text.trim()) continue;
       const audioPath = join(directory, `audio-${sequence}.wav`);
       const objectKey = `walkthroughs/${run.walkthroughId}/temporary/${runId}/audio-${sequence}.wav`;
-      const idempotencyKey = providerInvocationKey(runId, run.pipelineVersion, stage, "nemotron-asr", range);
+      const idempotencyKey = providerInvocationKey(runId, run.pipelineVersion, stage, CREATIVE_TRANSCRIBE_CAPABILITY, range);
       try {
         await media.extractAudioWindow(sourcePath, audioPath, range);
         await storage.putFile({ objectKey, filePath: audioPath, mimeType: "audio/wav" });
         const audioUrl = await storage.createReadUrl({ assetId: objectKey, expiresInSeconds: SIGNED_READ_SECONDS });
         let result;
         try {
-          result = await provider.transcribe({ walkthroughId: run.walkthroughId, audioUrl, idempotencyKey });
+          result = await transcriptionProvider.transcribe({ walkthroughId: run.walkthroughId, audioUrl, idempotencyKey });
         } catch (error) {
-          if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, "nemotron-asr", idempotencyKey, error);
+          if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, CREATIVE_TRANSCRIBE_CAPABILITY, idempotencyKey, error);
           throw error;
         }
         await database.$transaction(async (tx) => {
@@ -130,6 +133,7 @@ export async function processWalkthrough(
 
     stage = "ANALYZING_MEDIA";
     if (run.status !== "ANALYZING_MEDIA") await transitionProcessingRun(runId, "ANALYZING_MEDIA", {}, database);
+    const visualProvider = dependencies.visualProvider ?? legacyProvider ?? configuredVisualSemanticProvider();
     const transcript = await database.transcriptSegment.findMany({ where: { walkthroughId: run.walkthroughId, processingRunId: runId }, orderBy: { sequence: "asc" } });
     const clips = visualClips(duration, transcript.map(({ startSeconds, endSeconds, text }) => ({ startSeconds, endSeconds, text })));
     for (const [index, range] of clips.entries()) {
@@ -159,7 +163,7 @@ export async function processWalkthrough(
       const mediaUrl = await storage.createReadUrl({ assetId: clipAsset.objectKey, expiresInSeconds: SIGNED_READ_SECONDS });
       let result;
       try {
-        result = await provider.analyzeVisual({ walkthroughId: run.walkthroughId, mediaUrl, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, idempotencyKey });
+        result = await visualProvider.analyzeVisual({ walkthroughId: run.walkthroughId, mediaUrl, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, idempotencyKey });
       } catch (error) {
         if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, "marlin-video", idempotencyKey, error);
         throw error;

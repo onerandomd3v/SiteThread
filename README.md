@@ -38,7 +38,7 @@ Findings remain traceable to their source where available, including transcript 
 
 ## Livepeer
 
-Livepeer is SiteThread's primary media-intelligence layer. The selected raw MCP path uses six-second SiteThread-timed `nemotron-asr` windows and bounded `marlin-video` clips, followed by a separate `gemini-text` reasoning step that prepares grounded draft observations. Production bearer ownership, private signed-media fetches, and representative construction-media quality still require live validation.
+Livepeer's official creative MCP is used for bounded transcription only. SiteThread creates six-second FFmpeg windows, gives the creative `transcribe` tool a short-lived private R2 URL, and retains its own source-window bounds because provider timing may be absent. Visual semantics and strict observation reasoning remain separate runtime dependencies; the application must not claim Nemotron, Marlin, or Gemini service execution without returned metadata.
 
 See the [Livepeer integration and technical spike](docs/livepeer-integration.md) for the detailed integration decisions, provider boundaries, capability validation, and processing strategy.
 

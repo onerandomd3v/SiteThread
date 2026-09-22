@@ -4,7 +4,6 @@ import { parseServerEnv } from "./env";
 const requiredValues = {
   DATABASE_URL: "postgresql://user:password@localhost:5432/sitethread",
   R2_BUCKET_NAME: "sitethread-media",
-  LIVEPEER_MCP_URL: "https://agent.livepeer.org/api/mcp",
 };
 
 describe("server environment contract", () => {
