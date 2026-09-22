@@ -104,7 +104,7 @@ function scenario(failVisualOnce = false, failTranscription = false) {
     },
   };
   const reasoner: ObservationReasoner = {
-    extract: async (input) => ({ value: { observations: [] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }),
+    extract: async (input) => ({ value: { observations: [] }, diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }),
   };
   return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get visualCalls() { return visualCalls; }, get capabilityDiscoveries() { return capabilityDiscoveries; } };
 }
@@ -184,7 +184,7 @@ describe("COD-17 processing pipeline", () => {
   it("marks an extraction failure at EXTRACTING_OBSERVATIONS without redoing media work", async () => {
     const state = scenario();
     state.run.status = "EXTRACTING_OBSERVATIONS";
-    state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
+    state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
     await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
     expect(state.run.status).toBe("PROCESSING_FAILED");
     expect(state.run.failedStep).toBe("EXTRACTING_OBSERVATIONS");

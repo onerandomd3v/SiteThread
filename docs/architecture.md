@@ -592,21 +592,15 @@ The observation reasoner must:
 
 Keep reasoning separate from Livepeer integration.
 
-Example:
+Current provider boundary:
 
 ```ts
 interface ObservationReasoner {
-  extract(context: WalkthroughContext): Promise<ObservationDraft[]>;
+  extract(input: ObservationReasoningInput): Promise<ProviderResult<ObservationReasoningOutput>>;
 }
 ```
 
-Preferred approach:
-
-1. Use a suitable Livepeer reasoning/text capability where reliable.
-2. If necessary, use another text model only for final structured reasoning.
-3. Keep the core multimodal media intelligence on Livepeer.
-
-This preserves output quality while keeping Livepeer materially central.
+The current live implementation uses Google Gemini behind this SiteThread-owned contract. It receives only labeled transcript and visual evidence, validates strict JSON with the existing application schema, and rejects evidence references not supplied to that invocation. Gemini-specific request details and attribution stay inside the adapter; fixture mode remains deterministic and live mode fails closed without configuration. Do not route observation reasoning through the legacy raw Livepeer `gemini-text` capability or add an automatic provider fallback.
 
 ---
 
