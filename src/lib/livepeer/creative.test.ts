@@ -61,7 +61,11 @@ describe("Livepeer creative transcription adapter", () => {
       close: async () => undefined,
     };
     const provider = new CreativeTranscriptionProvider(endpoint, async () => session);
-    await expect(provider.transcribe({ walkthroughId: "walk", audioUrl: signedUrl, idempotencyKey: "window-key" })).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN_DELIVERY", retryable: false });
+    await expect(provider.transcribe({ walkthroughId: "walk", audioUrl: signedUrl, idempotencyKey: "window-key" })).rejects.toMatchObject({
+      code: "PROVIDER_UNCERTAIN_DELIVERY",
+      retryable: false,
+      attribution: { provider: "livepeer", capability: CREATIVE_TRANSCRIBE_CAPABILITY },
+    });
     expect(calls.filter((name) => name === "transcribe")).toHaveLength(1);
   });
 

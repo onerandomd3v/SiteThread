@@ -171,7 +171,7 @@ export class CreativeTranscriptionProvider implements TranscriptionProvider {
     } catch (error) {
       const classified = classifyCreativeError(error, "transcription");
       if (transcribeDispatched && classified.code !== "PROVIDER_RESULT_INVALID") {
-        throw new ProviderCallError("Livepeer creative transcription delivery is uncertain; no automatic paid retry was attempted.", "PROVIDER_UNCERTAIN_DELIVERY", false, classified.rawResponse);
+        throw new ProviderCallError("Livepeer creative transcription delivery is uncertain; no automatic paid retry was attempted.", "PROVIDER_UNCERTAIN_DELIVERY", false, classified.rawResponse, { provider: "livepeer", capability: CREATIVE_TRANSCRIBE_CAPABILITY });
       }
       throw withProviderAttribution(classified, { provider: "livepeer", capability: CREATIVE_TRANSCRIBE_CAPABILITY });
     } finally {
