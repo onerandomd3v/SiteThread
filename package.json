@@ -18,6 +18,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1134.0",
     "@aws-sdk/s3-request-presigner": "^3.1134.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@prisma/client": "^6.16.2",
     "@trigger.dev/sdk": "4.6.3",
     "next": "^16.0.0",

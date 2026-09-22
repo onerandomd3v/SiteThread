@@ -19,7 +19,7 @@ export type CapabilityRequirement = "TRANSCRIPTION" | "VISION";
 
 export interface MediaCapabilities {
   discoveredAt: Date;
-  requirements: Record<CapabilityRequirement, { capabilityId: string; modelId: string; schemaVersion?: string }>;
+  requirements: Partial<Record<CapabilityRequirement, { capabilityId: string; modelId: string; schemaVersion?: string }>>;
 }
 
 export interface TranscriptionInput {
@@ -37,8 +37,18 @@ export interface VisualAnalysisInput {
 }
 
 export interface MediaIntelligenceProvider {
+  /** Legacy combined contract retained for fixture and raw-provider compatibility. */
   discoverCapabilities(): Promise<MediaCapabilities>;
   transcribe(input: TranscriptionInput): Promise<ProviderResult<ProviderTranscriptResult>>;
+  analyzeVisual(input: VisualAnalysisInput): Promise<ProviderResult<ProviderVisionResult>>;
+}
+
+export interface TranscriptionProvider {
+  discoverCapabilities(): Promise<MediaCapabilities>;
+  transcribe(input: TranscriptionInput): Promise<ProviderResult<ProviderTranscriptResult>>;
+}
+
+export interface VisualSemanticProvider {
   analyzeVisual(input: VisualAnalysisInput): Promise<ProviderResult<ProviderVisionResult>>;
 }
 
