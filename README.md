@@ -38,7 +38,7 @@ Findings remain traceable to their source where available, including transcript 
 
 ## Livepeer
 
-Livepeer's official creative MCP is used for bounded transcription. SiteThread creates six-second FFmpeg windows, gives the creative `transcribe` tool a short-lived private R2 URL, and retains its own source-window bounds because provider timing may be absent. Live visual semantics use a separate Google Gemini adapter over the existing provider seam; strict observation reasoning remains separate, and the application must not claim a provider/model without returned metadata.
+Livepeer's official creative MCP is used for bounded transcription. SiteThread creates six-second FFmpeg windows, gives the creative `transcribe` tool a short-lived private R2 URL, and retains its own source-window bounds because provider timing may be absent. Google Gemini adapters provide bounded visual semantics and structured observation reasoning behind separate SiteThread-owned interfaces. The reasoner sees only labeled SiteThread evidence, validates Gemini JSON again with the existing Zod schema, and rejects references outside that evidence bundle. Provider provenance records the actual configured model; there is no raw Livepeer `gemini-text` route or provider fallback.
 
 See the [Livepeer integration and technical spike](docs/livepeer-integration.md) for the detailed integration decisions, provider boundaries, capability validation, and processing strategy.
 
@@ -58,7 +58,7 @@ See the [architecture and engineering plan](docs/architecture.md) for system bou
 | Database | Neon PostgreSQL, Prisma |
 | Media storage | Cloudflare R2 |
 | Background processing | Trigger.dev |
-| Media intelligence | Livepeer Agent |
+| Media intelligence | Livepeer Agent, Google Gemini |
 | Media utilities | FFmpeg |
 | Hosting | Vercel |
 | Testing | Vitest, Playwright |

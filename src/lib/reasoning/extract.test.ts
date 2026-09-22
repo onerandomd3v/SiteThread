@@ -38,7 +38,7 @@ function scenario() {
       reasonerInputs.push(input);
       return {
       value: { observations: [{ type: "potential_issue", description: "Water is visible and reported at the doorway.", suggestedAction: "Ask the site supervisor to review the visible condition.", evidenceRefs: ["T0", "V0"] }] },
-      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 },
+      diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 },
       };
     },
   };
@@ -65,7 +65,7 @@ describe("observation extraction persistence", () => {
       { transcriptSegmentId: "segment-1", mediaAssetId: "source-1", sourceStartSeconds: 0, sourceEndSeconds: 6, label: "Narration 00:00–00:06" },
       { mediaAssetId: "clip-1", sourceStartSeconds: 1, sourceEndSeconds: 3, label: "Visual evidence 00:01–00:03" },
     ] });
-    expect(state.invocations[0]).toMatchObject({ stage: "EXTRACTING_OBSERVATIONS", capability: "gemini-text", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6 });
+    expect(state.invocations[0]).toMatchObject({ stage: "EXTRACTING_OBSERVATIONS", capability: "observation-reasoning", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6 });
     expect(state.reasonerInputs[0]).toEqual({
       idempotencyKey: expect.stringMatching(/^[a-f0-9]{64}$/),
       evidence: [
@@ -77,7 +77,7 @@ describe("observation extraction persistence", () => {
 
   it("does not persist when the reasoner returns an unknown evidence reference", async () => {
     const state = scenario();
-    state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
+    state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
     await expect(extractObservations("run-1", { database: state.database, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
     expect(state.created).toHaveLength(0);
     expect(state.run.status).toBe("EXTRACTING_OBSERVATIONS");
@@ -87,7 +87,7 @@ describe("observation extraction persistence", () => {
     const state = scenario();
     state.reasoner.extract = async (input) => ({
       value: { observations: [{ type: "potential_issue", description: "A structural crack is visible in the beam.", evidenceRefs: ["V0"] }] },
-      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 },
+      diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 },
     });
     await extractObservations("run-1", { database: state.database, reasoner: state.reasoner });
     expect(state.created).toHaveLength(0);
@@ -98,7 +98,7 @@ describe("observation extraction persistence", () => {
     const state = scenario();
     state.reasoner.extract = async () => ({
       value: { observations: [] },
-      diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: "wrong-key", rawResponse: {}, latencyMs: 0 },
+      diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: "wrong-key", rawResponse: {}, latencyMs: 0 },
     });
     await expect(extractObservations("run-1", { database: state.database, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
     expect(state.invocations).toHaveLength(0);
@@ -111,6 +111,7 @@ describe("observation extraction persistence", () => {
     state.run.status = "NEEDS_REVIEW";
     await extractObservations("run-1", { database: state.database, reasoner: state.reasoner });
     expect(state.created).toHaveLength(0);
+    expect(state.reasonerInputs).toHaveLength(0);
   });
 
   it("reuses the run-scoped observation set when extraction is redelivered", async () => {
