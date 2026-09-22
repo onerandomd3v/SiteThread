@@ -4,7 +4,7 @@
 >
 > **Validation dates:** 2026-09-17 UTC (COD-14); 2026-09-17 UTC / 2026-09-18 local (COD-32)
 >
-> **Status:** COD-176 selects the official creative MCP for bounded transcription only. Visual-semantic and strict observation-reasoning providers remain explicit unresolved runtime dependencies.
+> **Status:** COD-176 selects the official creative MCP for bounded transcription. COD-177 adds a separate Google Gemini visual-semantic provider for bounded six-second evidence clips; strict observation reasoning remains a separate runtime dependency.
 >
 > **Scope:** Integration decision and validation findings. No COD-17 pipeline implementation.
 
@@ -19,7 +19,7 @@ COD-176 freezes one proven live contract: exact six-second FFmpeg source windows
 ```text
 Creative MCP transcribe → bounded transcript text
 FFmpeg + private R2   → deterministic derivatives and evidence assets
-Separate visual provider → unresolved runtime dependency
+Google Gemini          → bounded visual-semantic prose from inline MP4 bytes
 Separate reasoner       → unresolved runtime dependency
 SiteThread              → source ranges, provenance, idempotency, review, reports
 ```
@@ -151,6 +151,10 @@ Map the selected synchronous lifecycle into existing processing states as follow
 | Nonretryable failure, invalid result, exhausted attempts, or whole-stage deadline | `PROCESSING_FAILED` with `failedStep`, stable error code, safe message, and retry count |
 
 The COD-176 transcription adapter contract is therefore: creative MCP `/api/mcp/creative`; protocol `2024-11-05`; no Authorization header; bounded SDK connection/request lifetime; pricing/balance preflight; six-second SiteThread-owned windows; result-text validation; same-key application idempotency; no signed-URL persistence/logging; and no provider/model substitution. The legacy raw adapter remains isolated and is not selected by the hackathon live factory.
+
+### COD-177 visual-semantic provider contract
+
+The live visual route is SiteThread's `VisualSemanticProvider` backed by the official Google Gemini `generateContent` API. It fetches each short-lived private R2 URL server-side, rejects media above a conservative inline-request byte ceiling, sends the bytes as `video/mp4`, and never sends the signed URL to Gemini. Gemini returns interpretation prose only; SiteThread retains the evidence clip and authoritative source range and does not accept invented timestamps. Provider diagnostics record the configured Google model, capability, idempotency key, latency, and sanitized response metadata without media bytes, signed URLs, or credentials. Fixture mode remains deterministic and does not construct the Gemini provider. Missing live Gemini configuration fails closed; there is no Marlin or other visual fallback.
 
 ## COD-14 runtime baseline
 

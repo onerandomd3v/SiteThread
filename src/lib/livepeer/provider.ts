@@ -7,6 +7,7 @@ import { sanitizeProviderResponse, sanitizeResultText } from "./sanitize";
 import type { MediaCapabilities, MediaIntelligenceProvider, ProviderResult, TranscriptionInput, TranscriptionProvider, VisualAnalysisInput, VisualSemanticProvider } from "./types";
 import { ProviderCallError } from "./provider-errors";
 import { configuredCreativeTranscriptionProvider } from "./creative";
+import { GEMINI_DEFAULT_MODEL, GeminiVisualSemanticProvider } from "./gemini";
 
 const PROTOCOL = "2024-11-05";
 const LIVEPEER_MCP_ORIGIN = "https://agent.livepeer.org";
@@ -201,5 +202,6 @@ export function configuredTranscriptionProvider(): TranscriptionProvider {
 export function configuredVisualSemanticProvider(): VisualSemanticProvider {
   const env = parseServerEnv();
   if (env.MEDIA_PROVIDER_MODE === "fixture") return new FixtureMediaIntelligenceProvider();
-  throw new ProviderCallError("A separate visual-semantic provider is not configured for the creative MCP path.", "PROVIDER_CONTRACT_UNRESOLVED", false);
+  if (!env.GEMINI_API_KEY) throw new ProviderCallError("Google Gemini visual analysis is not configured.", "PROVIDER_CONTRACT_UNRESOLVED", false);
+  return new GeminiVisualSemanticProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
 }

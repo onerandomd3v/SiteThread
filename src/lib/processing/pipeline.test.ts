@@ -4,6 +4,7 @@ import { ProviderCallError } from "@/lib/livepeer/provider";
 import type { MediaIntelligenceProvider } from "@/lib/livepeer/types";
 import type { ProcessingMediaStorage } from "@/lib/storage/types";
 import type { ObservationReasoner } from "@/lib/reasoning/types";
+import { VISUAL_SEMANTIC_CAPABILITY } from "@/lib/livepeer/types";
 import { retryProcessingRun } from "./lifecycle";
 import { processWalkthrough, providerInvocationKey, type ProcessingMediaTools } from "./pipeline";
 
@@ -137,7 +138,7 @@ describe("COD-17 processing pipeline", () => {
     expect(state.candidates.size).toBe(1);
     expect(state.providerKeys).toHaveLength(4);
     expect(state.providerKeys[2]).toBe(state.providerKeys[3]);
-    expect(providerInvocationKey("run", "mvp-upload-v1", "ANALYZING_MEDIA", "marlin-video", { startSeconds: 0, endSeconds: 6 })).toBe(state.providerKeys[2]);
+    expect(providerInvocationKey("run", "mvp-upload-v1", "ANALYZING_MEDIA", VISUAL_SEMANTIC_CAPABILITY, { startSeconds: 0, endSeconds: 6 })).toBe(state.providerKeys[2]);
     expect(state.providerKeys[2]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
   });
 

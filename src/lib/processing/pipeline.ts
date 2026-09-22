@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MediaAssetKind, MediaAssetStatus, Prisma, type ProcessingStatus } from "@prisma/client";
 import { db } from "@/lib/db/client";
 import { SiteThreadError, serializeError } from "@/lib/errors";
-import type { MediaIntelligenceProvider, ProviderDiagnostic, TranscriptionProvider, VisualSemanticProvider } from "@/lib/livepeer/types";
+import { VISUAL_SEMANTIC_CAPABILITY, type MediaIntelligenceProvider, type ProviderDiagnostic, type TranscriptionProvider, type VisualSemanticProvider } from "@/lib/livepeer/types";
 import { configuredVisualSemanticProvider, configuredTranscriptionProvider, ProviderCallError } from "@/lib/livepeer/provider";
 import { sanitizeProviderResponse } from "@/lib/livepeer/sanitize";
 import { extractAudioWindow, extractVisualClip, probeDuration } from "@/lib/media/ffmpeg";
@@ -160,13 +160,13 @@ export async function processWalkthrough(
         }
       }
       if (!clipAsset.durationSeconds || !Number.isFinite(clipAsset.durationSeconds)) throw new SiteThreadError("The visual clip duration is unavailable.", "MEDIA_UNAVAILABLE");
-      const idempotencyKey = providerInvocationKey(runId, run.pipelineVersion, stage, "marlin-video", range);
+      const idempotencyKey = providerInvocationKey(runId, run.pipelineVersion, stage, VISUAL_SEMANTIC_CAPABILITY, range);
       const mediaUrl = await storage.createReadUrl({ assetId: clipAsset.objectKey, expiresInSeconds: SIGNED_READ_SECONDS });
       let result;
       try {
         result = await visualProvider.analyzeVisual({ walkthroughId: run.walkthroughId, mediaUrl, sourceStartSeconds: range.startSeconds, sourceEndSeconds: range.endSeconds, idempotencyKey });
       } catch (error) {
-        if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, "marlin-video", idempotencyKey, error);
+        if (error instanceof ProviderCallError) await saveProviderFailure(database, runId, stage, range, VISUAL_SEMANTIC_CAPABILITY, idempotencyKey, error);
         throw error;
       }
       const eventRange = providerEventSourceRange(range, result.value.eventRange, duration, clipAsset.durationSeconds);
