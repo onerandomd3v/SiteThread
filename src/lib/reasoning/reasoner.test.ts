@@ -14,10 +14,10 @@ const input: ObservationReasoningInput = {
   ],
 };
 
-function response(text: string, status = 200): Response {
+function response(text: string, status = 200, finishReason = "STOP"): Response {
   if (status < 200 || status >= 300) return new Response("provider error body should not be stored", { status });
   return Response.json({
-    candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }],
+    candidates: [{ content: { parts: [{ text }] }, finishReason }],
     modelVersion: "gemini-test-served-version",
     responseId: "response-1",
     usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 12 },
@@ -37,7 +37,11 @@ function requestBody(requests: Array<{ url: string; init?: RequestInit }>) {
   return JSON.parse(String(requests[0].init?.body)) as {
     systemInstruction: { parts: Array<{ text: string }> };
     contents: Array<{ parts: Array<{ text: string }> }>;
-    generationConfig: { responseFormat: { text: { mimeType: string; schema: Record<string, unknown> } } };
+    generationConfig: {
+      maxOutputTokens: number;
+      thinkingConfig?: { thinkingLevel?: string; thinkingBudget?: number };
+      responseFormat: { text: { mimeType: string; schema: Record<string, unknown> } };
+    };
   };
 }
 
@@ -102,6 +106,7 @@ describe("observation reasoner", () => {
     expect(requests[0].url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent");
     expect(new Headers(requests[0].init?.headers).get("x-goog-api-key")).toBe(apiKey);
     expect(body.generationConfig.responseFormat.text.mimeType).toBe("application/json");
+    expect(body.generationConfig.maxOutputTokens).toBe(4_096);
     expect(schema).toMatchObject({ type: "object", required: ["observations"], additionalProperties: false });
     expect(observationSchema.maxItems).toBe(20);
     expect(itemSchema).toMatchObject({ type: "object", additionalProperties: false, required: ["type", "description", "evidenceRefs"] });
@@ -141,6 +146,47 @@ describe("observation reasoner", () => {
   it("accepts a valid empty observation result", async () => {
     const { provider } = mockedProvider(JSON.stringify({ observations: [] }));
     await expect(provider.extract(input)).resolves.toMatchObject({ value: { observations: [] } });
+  });
+
+  it("uses low thinking for Gemini 3.x without applying the 2.5 budget", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      return response(JSON.stringify({ observations: [] }));
+    }) as typeof fetch;
+    await new GeminiObservationReasoner(apiKey, "gemini-3.8-flash", fetcher).extract(input);
+    const body = requestBody(requests);
+    expect(body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
+    expect(body.generationConfig.maxOutputTokens).toBe(4_096);
+  });
+
+  it("uses a bounded 2.5 thinking budget and omits thinking controls for unknown model families", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      return response(JSON.stringify({ observations: [] }));
+    }) as typeof fetch;
+    await new GeminiObservationReasoner(apiKey, "gemini-2.5-flash", fetcher).extract(input);
+    expect(requestBody(requests).generationConfig.thinkingConfig).toEqual({ thinkingBudget: 512 });
+    requests.length = 0;
+    await new GeminiObservationReasoner(apiKey, "custom-gemini-model", fetcher).extract(input);
+    expect(requestBody(requests).generationConfig.thinkingConfig).toBeUndefined();
+  });
+
+  it("rejects MAX_TOKENS even when partial text parses as valid observation JSON", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      return response(JSON.stringify({ observations: [] }), 200, "MAX_TOKENS");
+    }) as typeof fetch;
+    const provider = new GeminiObservationReasoner(apiKey, "gemini-test-model", fetcher);
+    await expect(provider.extract(input)).rejects.toMatchObject({
+      code: "PROVIDER_RESULT_INVALID",
+      retryable: false,
+      attribution: { provider: "google-gemini", capability: "observation-reasoning" },
+      rawResponse: { finishReason: "MAX_TOKENS" },
+    });
+    expect(requests).toHaveLength(1);
   });
 
   it("rejects an empty provider response", async () => {
@@ -199,27 +245,18 @@ describe("observation reasoner", () => {
     }
   });
 
-  it("allows explicit retry for a rate-limit response but does not redispatch automatically", async () => {
-    const { provider, requests } = mockedProvider("", 429);
+  it.each([408, 429, 500, 503])("marks explicit HTTP %i as retryable without redispatch", async (status) => {
+    const { provider, requests } = mockedProvider("", status);
     await expect(provider.extract(input)).rejects.toMatchObject({
       code: "PROVIDER_UNAVAILABLE",
       retryable: true,
       attribution: { provider: "google-gemini", capability: "observation-reasoning" },
+      rawResponse: { httpStatus: status },
     });
     expect(requests).toHaveLength(1);
   });
 
-  it("treats provider HTTP timeouts as uncertain, non-retryable delivery", async () => {
-    const { provider, requests } = mockedProvider("", 408);
-    await expect(provider.extract(input)).rejects.toMatchObject({
-      code: "PROVIDER_UNCERTAIN_DELIVERY",
-      retryable: false,
-      attribution: { provider: "google-gemini", capability: "observation-reasoning" },
-    });
-    expect(requests).toHaveLength(1);
-  });
-
-  it("does not mark uncertain transport or 5xx delivery retryable and never falls back", async () => {
+  it("keeps uncertain transport failures non-retryable and never falls back", async () => {
     const requests: string[] = [];
     const failingFetch = (async (url: string | URL | Request) => {
       requests.push(String(url));
@@ -239,16 +276,7 @@ describe("observation reasoner", () => {
     }) as typeof fetch);
     await expect(connectionFailure.extract(input)).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN_DELIVERY", retryable: false });
     expect(requests).toHaveLength(2);
-    const unavailable = new GeminiObservationReasoner(apiKey, "gemini-configured-model", (async (url: string | URL | Request) => {
-      requests.push(String(url));
-      return response("", 503);
-    }) as typeof fetch);
-    await expect(unavailable.extract(input)).rejects.toMatchObject({
-      code: "PROVIDER_UNAVAILABLE",
-      retryable: false,
-      attribution: { provider: "google-gemini", capability: "observation-reasoning" },
-    });
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(2);
     expect(requests.filter((url) => url !== "transport-error").every((url) => url.startsWith("https://generativelanguage.googleapis.com/"))).toBe(true);
     expect(requests).not.toContain("https://agent.livepeer.org/api/mcp/raw");
   });

@@ -9,6 +9,8 @@ import { OBSERVATION_REASONING_CAPABILITY, type ObservationReasoner, type Observ
 
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_TIMEOUT_MS = 60_000;
+const GEMINI_MAX_OUTPUT_TOKENS = 4_096;
+const GEMINI_25_THINKING_BUDGET = 512;
 
 export const GEMINI_REASONING_ATTRIBUTION = {
   provider: "google-gemini",
@@ -79,6 +81,12 @@ function timeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
+function thinkingConfig(model: string): { thinkingLevel: "low" } | { thinkingBudget: number } | undefined {
+  if (/^gemini-3(?:[.-]|$)/i.test(model)) return { thinkingLevel: "low" };
+  if (/^gemini-2\.5(?:[.-]|$)/i.test(model)) return { thinkingBudget: GEMINI_25_THINKING_BUDGET };
+  return undefined;
+}
+
 export class GeminiObservationReasoner implements ObservationReasoner {
   constructor(
     private readonly apiKey: string,
@@ -106,12 +114,14 @@ export class GeminiObservationReasoner implements ObservationReasoner {
     }));
     const knownRefs = new Set(evidence.map(({ ref }) => ref));
     const endpoint = `${GEMINI_ENDPOINT}/${encodeURIComponent(this.model)}:generateContent`;
+    const modelThinkingConfig = thinkingConfig(this.model);
     const requestBody = {
       systemInstruction: { parts: [{ text: REASONING_INSTRUCTION }] },
       contents: [{ role: "user", parts: [{ text: JSON.stringify({ evidence }) }] }],
       generationConfig: {
         temperature: 0,
-        maxOutputTokens: 2_000,
+        maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
+        ...(modelThinkingConfig ? { thinkingConfig: modelThinkingConfig } : {}),
         responseFormat: { text: { mimeType: "application/json", schema: geminiOutputSchema(evidence.map(({ ref }) => ref)) } },
       },
     };
@@ -141,10 +151,10 @@ export class GeminiObservationReasoner implements ObservationReasoner {
         throw new ProviderCallError("Google Gemini is rate limited; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, { httpStatus: response.status });
       }
       if (response.status === 408) {
-        throw new ProviderCallError("Google Gemini timed out after reasoning was dispatched; delivery is uncertain.", "PROVIDER_UNCERTAIN_DELIVERY", false, { httpStatus: response.status });
+        throw new ProviderCallError("Google Gemini returned a transient request timeout; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, { httpStatus: response.status });
       }
       if (response.status >= 500) {
-        throw new ProviderCallError("Google Gemini is unavailable; inference delivery cannot be confirmed.", "PROVIDER_UNAVAILABLE", false, { httpStatus: response.status });
+        throw new ProviderCallError("Google Gemini returned a transient server error; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, { httpStatus: response.status });
       }
       throw new ProviderCallError("Google Gemini rejected the reasoning request.", "PROVIDER_INVALID_INPUT", false, { httpStatus: response.status });
     }
@@ -166,6 +176,9 @@ export class GeminiObservationReasoner implements ObservationReasoner {
       usageMetadata: parsed.data.usageMetadata,
       finishReason: candidate?.finishReason,
     };
+    if (candidate?.finishReason === "MAX_TOKENS") {
+      throw invalidResult("Google Gemini exhausted its output-token limit before completing observation JSON.", safeMetadata);
+    }
     if (!text) throw invalidResult("Google Gemini returned no observation JSON.", safeMetadata);
 
     let decoded: unknown;
