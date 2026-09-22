@@ -8,9 +8,11 @@ const requiredValues = {
 
 describe("server environment contract", () => {
   it("normalizes blank optional values to undefined", () => {
-    const env = parseServerEnv({ ...requiredValues, R2_ACCOUNT_ID: "", LIVEPEER_MCP_BEARER: "   " });
+    const env = parseServerEnv({ ...requiredValues, R2_ACCOUNT_ID: "", LIVEPEER_MCP_BEARER: "   ", LIVEPEER_MCP_URL: " ", LIVEPEER_CREATIVE_MCP_URL: "   " });
     expect(env.R2_ACCOUNT_ID).toBeUndefined();
     expect(env.LIVEPEER_MCP_BEARER).toBeUndefined();
+    expect(env.LIVEPEER_MCP_URL).toBeUndefined();
+    expect(env.LIVEPEER_CREATIVE_MCP_URL).toBeUndefined();
   });
 
   it("preserves populated optional values", () => {

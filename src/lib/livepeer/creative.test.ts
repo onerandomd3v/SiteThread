@@ -48,6 +48,23 @@ describe("Livepeer creative transcription adapter", () => {
     expect(calls).not.toContain("transcribe");
   });
 
+  it("does not redispatch after an uncertain transcribe timeout", async () => {
+    const calls: string[] = [];
+    const session: CreativeMcpSession = {
+      listTools: async () => ({ tools: [{ name: "transcribe", inputSchema: { type: "object" } }, { name: "get_pricing", inputSchema: { type: "object" } }, { name: "spend_cap", inputSchema: { type: "object" } }] }),
+      callTool: async (name) => {
+        calls.push(name);
+        if (name === "get_pricing") return { content: [], structuredContent: { capabilities: [{ name: "wizper", display_price_usd: null }] } };
+        if (name === "spend_cap") return { content: [], structuredContent: { remaining_usd: 99.9 } };
+        throw new Error("request timed out after dispatch");
+      },
+      close: async () => undefined,
+    };
+    const provider = new CreativeTranscriptionProvider(endpoint, async () => session);
+    await expect(provider.transcribe({ walkthroughId: "walk", audioUrl: signedUrl, idempotencyKey: "window-key" })).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN_DELIVERY", retryable: false });
+    expect(calls.filter((name) => name === "transcribe")).toHaveLength(1);
+  });
+
   it("does not add an Authorization header to the SDK transport", async () => {
     const requests: RequestInit[] = [];
     const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {

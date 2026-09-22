@@ -53,7 +53,7 @@ function toolResultContent(result: CallToolResult, operation: string): Record<st
 function classifyCreativeError(error: unknown, operation: string): ProviderCallError {
   if (error instanceof ProviderCallError) return error;
   const message = error instanceof Error ? error.message : "";
-  if (/timeout|timed out|abort/i.test(message)) return new ProviderCallError(`Livepeer creative ${operation} timed out.`, "PROVIDER_TIMEOUT", true, { message });
+  if (/timeout|timed out|abort/i.test(message)) return new ProviderCallError(`Livepeer creative ${operation} timed out before a response was confirmed.`, "PROVIDER_UNCERTAIN_DELIVERY", false, { message });
   const detail = `${message} ${JSON.stringify(error)}`;
   if (/401|403|unauthori[sz]ed|forbidden|credit|payment|balance|billing/i.test(detail)) return new ProviderCallError(`Livepeer creative ${operation} authorization or billing failed.`, "PROVIDER_AUTH", false, { message: detail.slice(0, 500) });
   return new ProviderCallError(`Livepeer creative ${operation} failed.`, "PROVIDER_UNAVAILABLE", true, { message });
@@ -145,36 +145,37 @@ export class CreativeTranscriptionProvider implements TranscriptionProvider {
   }
 
   async transcribe(input: TranscriptionInput): Promise<ProviderResult<z.infer<typeof ProviderTranscriptResultSchema>>> {
-    let attempt = 0;
-    while (true) {
-      let session: CreativeMcpSession | undefined;
-      const started = Date.now();
-      try {
-        session = await this.sessionFactory(this.endpoint);
-        const listed = await session.listTools();
-        requiredTools(listed);
-        const preflight = await readPricingAndBalance(session);
-        const response = await session.callTool("transcribe", { source_url: input.audioUrl, granularity: "segment", burn: false }, { timeout: 90_000, maxTotalTimeout: 90_000 });
-        const content = toolResultContent(response, "transcription");
-        const parsed = transcribeResultSchema.safeParse(content);
-        if (!parsed.success) throw new ProviderCallError("Livepeer creative transcription returned an invalid result.", "PROVIDER_RESULT_INVALID", false, content);
-        return {
-          value: ProviderTranscriptResultSchema.parse({ text: parsed.data.text }),
-          diagnostic: {
-            provider: "livepeer",
-            capability: CREATIVE_TRANSCRIBE_CAPABILITY,
-            idempotencyKey: input.idempotencyKey,
-            rawResponse: sanitizeProviderResponse({ operation: "creative/transcribe", result: content, pricing: preflight.pricing, balance: preflight.balance }),
-            latencyMs: Date.now() - started,
-          },
-        };
-      } catch (error) {
-        const classified = classifyCreativeError(error, "transcription");
-        if (classified.retryable && attempt === 0) { attempt += 1; continue; }
-        throw classified;
-      } finally {
-        await session?.close().catch(() => undefined);
+    let session: CreativeMcpSession | undefined;
+    let transcribeDispatched = false;
+    const started = Date.now();
+    try {
+      session = await this.sessionFactory(this.endpoint);
+      const listed = await session.listTools();
+      requiredTools(listed);
+      const preflight = await readPricingAndBalance(session);
+      transcribeDispatched = true;
+      const response = await session.callTool("transcribe", { source_url: input.audioUrl, granularity: "segment", burn: false }, { timeout: 90_000, maxTotalTimeout: 90_000 });
+      const content = toolResultContent(response, "transcription");
+      const parsed = transcribeResultSchema.safeParse(content);
+      if (!parsed.success) throw new ProviderCallError("Livepeer creative transcription returned an invalid result.", "PROVIDER_RESULT_INVALID", false, content);
+      return {
+        value: ProviderTranscriptResultSchema.parse({ text: parsed.data.text }),
+        diagnostic: {
+          provider: "livepeer",
+          capability: CREATIVE_TRANSCRIBE_CAPABILITY,
+          idempotencyKey: input.idempotencyKey,
+          rawResponse: sanitizeProviderResponse({ operation: "creative/transcribe", result: content, pricing: preflight.pricing, balance: preflight.balance }),
+          latencyMs: Date.now() - started,
+        },
+      };
+    } catch (error) {
+      const classified = classifyCreativeError(error, "transcription");
+      if (transcribeDispatched && classified.code !== "PROVIDER_RESULT_INVALID") {
+        throw new ProviderCallError("Livepeer creative transcription delivery is uncertain; no automatic paid retry was attempted.", "PROVIDER_UNCERTAIN_DELIVERY", false, classified.rawResponse);
       }
+      throw classified;
+    } finally {
+      await session?.close().catch(() => undefined);
     }
   }
 }

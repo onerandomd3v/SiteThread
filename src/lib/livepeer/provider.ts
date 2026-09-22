@@ -4,8 +4,9 @@ import { SiteThreadError } from "@/lib/errors";
 import { ProviderTranscriptResultSchema, ProviderVisionResultSchema } from "@/lib/schemas/provider";
 import { FixtureMediaIntelligenceProvider } from "./fixture";
 import { sanitizeProviderResponse, sanitizeResultText } from "./sanitize";
-import type { MediaCapabilities, MediaIntelligenceProvider, ProviderResult, TranscriptionInput, VisualAnalysisInput, VisualSemanticProvider } from "./types";
+import type { MediaCapabilities, MediaIntelligenceProvider, ProviderResult, TranscriptionInput, TranscriptionProvider, VisualAnalysisInput, VisualSemanticProvider } from "./types";
 import { ProviderCallError } from "./provider-errors";
+import { configuredCreativeTranscriptionProvider } from "./creative";
 
 const PROTOCOL = "2024-11-05";
 const LIVEPEER_MCP_ORIGIN = "https://agent.livepeer.org";
@@ -184,6 +185,12 @@ export function configuredMediaProvider(): MediaIntelligenceProvider {
   if (process.env.NODE_ENV === "production" && !env.LIVEPEER_MCP_BEARER) throw new SiteThreadError("Livepeer production credentials are not configured.", "PROVIDER_AUTH");
   if (!env.LIVEPEER_MCP_URL) throw new SiteThreadError("The legacy raw Livepeer endpoint is not configured.", "PROVIDER_CONTRACT_UNRESOLVED");
   return new LivepeerMediaIntelligenceProvider(env.LIVEPEER_MCP_URL, env.LIVEPEER_MCP_BEARER);
+}
+
+export function configuredTranscriptionProvider(): TranscriptionProvider {
+  const env = parseServerEnv();
+  if (env.MEDIA_PROVIDER_MODE === "fixture") return new FixtureMediaIntelligenceProvider();
+  return configuredCreativeTranscriptionProvider();
 }
 
 /**
