@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { db } from "@/lib/db/client";
 import { ProviderCallError } from "@/lib/livepeer/provider";
 import type { MediaIntelligenceProvider } from "@/lib/livepeer/types";
@@ -6,6 +6,11 @@ import type { ProcessingMediaStorage } from "@/lib/storage/types";
 import type { ObservationReasoner } from "@/lib/reasoning/types";
 import { retryProcessingRun } from "./lifecycle";
 import { processWalkthrough, providerInvocationKey, type ProcessingMediaTools } from "./pipeline";
+
+vi.mock("@/lib/livepeer/creative", () => ({
+  CREATIVE_MCP_ENDPOINT: "https://agent.livepeer.org/api/mcp/creative",
+  configuredCreativeTranscriptionProvider: () => { throw new Error("creative MCP must not be constructed in fixture mode"); },
+}));
 
 function scenario(failVisualOnce = false) {
   const source = { id: "source", walkthroughId: "walk", kind: "SOURCE_VIDEO", status: "AVAILABLE", objectKey: "private/source.mp4", mimeType: "video/mp4", byteSize: 1000, durationSeconds: null as number | null };
@@ -19,6 +24,7 @@ function scenario(failVisualOnce = false) {
   const providerKeys: string[] = [];
   let visualCalls = 0;
   let reasonerCalls = 0;
+  let capabilityDiscoveries = 0;
   const database = {
     processingRun: {
       findUnique: async () => ({ ...run, walkthrough: { mediaAssets: [...assets.values()] } }),
@@ -84,7 +90,7 @@ function scenario(failVisualOnce = false) {
   } as unknown as ProcessingMediaStorage;
   const media: ProcessingMediaTools = { probeDuration: async (filePath) => filePath.endsWith(".mp4") && filePath.includes("visual-") ? 6 : 12, extractAudioWindow: async () => undefined, extractVisualClip: async () => undefined };
   const provider: MediaIntelligenceProvider = {
-    discoverCapabilities: async () => ({ discoveredAt: new Date(), requirements: { TRANSCRIPTION: { capabilityId: "nemotron-asr", modelId: "fixture" }, VISION: { capabilityId: "marlin-video", modelId: "fixture" } } }),
+    discoverCapabilities: async () => { capabilityDiscoveries += 1; return { discoveredAt: new Date(), requirements: { TRANSCRIPTION: { capabilityId: "nemotron-asr", modelId: "fixture" }, VISION: { capabilityId: "marlin-video", modelId: "fixture" } } }; },
     transcribe: async ({ idempotencyKey }) => {
       providerKeys.push(idempotencyKey);
       return { value: { text: `Narration ${providerKeys.length}` }, diagnostic: { provider: "fixture", capability: "nemotron-asr", idempotencyKey, rawResponse: { source_url: "https://private.example/secret", text: "spoken" }, latencyMs: 1 } };
@@ -99,7 +105,7 @@ function scenario(failVisualOnce = false) {
   const reasoner: ObservationReasoner = {
     extract: async (input) => { reasonerCalls += 1; return { value: { observations: [] }, diagnostic: { provider: "fixture", capability: "gemini-text", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }; },
   };
-  return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get reasonerCalls() { return reasonerCalls; }, get visualCalls() { return visualCalls; } };
+  return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get reasonerCalls() { return reasonerCalls; }, get visualCalls() { return visualCalls; }, get capabilityDiscoveries() { return capabilityDiscoveries; } };
 }
 
 describe("COD-17 processing pipeline", () => {
@@ -150,21 +156,35 @@ describe("COD-17 processing pipeline", () => {
     expect(state.run.status).toBe("NEEDS_REVIEW");
   });
 
-  it("does not resume an active or extraction-stage run after redelivery", async () => {
+  it("resumes processing stages on redelivery and skips transcription discovery at visual stage", async () => {
     const state = scenario();
     const oldIdentity = { processingRunId: "older-run", sourceAssetId: "source", startSeconds: 0, endSeconds: 6 };
     state.segments.set(JSON.stringify(oldIdentity), { ...oldIdentity, walkthroughId: "walk", sequence: 0, text: "Earlier version" });
     state.run.status = "TRANSCRIBING";
     await processWalkthrough("run", { ...state, reasoner: state.reasoner });
-    expect(state.segments.size).toBe(1);
+    expect(state.segments.size).toBe(3);
     expect(state.segments.get(JSON.stringify(oldIdentity))?.text).toBe("Earlier version");
-    expect(state.transitions).toEqual([]);
+    expect(state.transitions).toEqual(["ANALYZING_MEDIA", "EXTRACTING_OBSERVATIONS", "NEEDS_REVIEW"]);
     state.run.status = "ANALYZING_MEDIA";
     await processWalkthrough("run", { ...state, reasoner: state.reasoner });
-    state.run.status = "EXTRACTING_OBSERVATIONS";
-    await processWalkthrough("run", { ...state, reasoner: state.reasoner });
-    expect(state.providerKeys).toHaveLength(0);
-    expect(state.reasonerCalls).toBe(0);
+    expect(state.segments.size).toBe(3);
+    expect(state.candidates.size).toBe(1);
+    expect(state.capabilityDiscoveries).toBe(1);
+  });
+
+  it("uses fixture providers without constructing creative MCP or sending signed URLs externally", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "fixture");
+    vi.stubEnv("LIVEPEER_CREATIVE_MCP_URL", "   ");
+    const state = scenario();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await processWalkthrough("run", { database: state.database, storage: state.storage, media: state.media });
+    expect(state.run.status).toBe("NEEDS_REVIEW");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify([...state.invocations.values()])).not.toContain("X-Amz-Signature");
+    fetchSpy.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it("marks an extraction failure after the claimed worker reaches EXTRACTING_OBSERVATIONS", async () => {

@@ -121,6 +121,5 @@ export class LivepeerObservationReasoner implements ObservationReasoner {
 export function configuredObservationReasoner(): ObservationReasoner {
   const env = parseServerEnv();
   if (env.MEDIA_PROVIDER_MODE === "fixture") return new FixtureObservationReasoner();
-  if (process.env.NODE_ENV === "production" && !env.LIVEPEER_MCP_BEARER) throw new SiteThreadError("Livepeer production credentials are not configured.", "PROVIDER_AUTH");
-  return new LivepeerObservationReasoner(env.LIVEPEER_MCP_URL, env.LIVEPEER_MCP_BEARER);
+  throw new SiteThreadError("A separate observation reasoning provider is not configured for the creative MCP path.", "PROVIDER_CONTRACT_UNRESOLVED");
 }

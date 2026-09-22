@@ -31,7 +31,7 @@ function liveReasoner(responseText: string, capture: string[]) {
 describe("observation reasoner", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("selects the explicitly configured fixture or live reasoner", () => {
+  it("uses fixture reasoning and refuses the unconfigured creative live path", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("LIVEPEER_MCP_URL", "https://agent.livepeer.org/api/mcp/raw");
@@ -40,7 +40,7 @@ describe("observation reasoner", () => {
     expect(configuredObservationReasoner()).toBeInstanceOf(FixtureObservationReasoner);
 
     vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
-    expect(configuredObservationReasoner()).toBeInstanceOf(LivepeerObservationReasoner);
+    expect(() => configuredObservationReasoner()).toThrow("A separate observation reasoning provider is not configured for the creative MCP path.");
   });
 
   it("uses a deterministic fixture without making a network request", async () => {
