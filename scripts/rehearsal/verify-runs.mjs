@@ -1,12 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { PrismaClient } from "@prisma/client";
-import { validateReportArtifactBinding, validateReportObservationEvidence } from "./provenance.mjs";
+import { validateReportArtifactBinding, validateReportObservationEvidence, validateRunProviderInvocations } from "./provenance.mjs";
 
 const prisma = new PrismaClient();
 const artifactDir = `${process.cwd()}/.rehearsal`;
 const input = JSON.parse(await readFile(`${artifactDir}/live-runs.json`, "utf8"));
-const requiredCapabilities = ["nemotron-asr", "marlin-video", "gemini-text"];
-
 function fail(message) { throw new Error(`Live provenance verification failed: ${message}`); }
 function unique(values, label) {
   if (new Set(values).size !== values.length) fail(`duplicate ${label}`);
@@ -30,11 +28,10 @@ for (const runRecord of input.runs) {
   const run = currentRuns[0];
   if (run.status !== "REPORT_READY") fail(`${walkthrough.id} ended in ${run.status}`);
   const invocations = await prisma.providerInvocation.findMany({ where: { processingRunId: run.id }, orderBy: { createdAt: "asc" } });
-  if (invocations.some((invocation) => invocation.provider !== "livepeer")) fail(`${walkthrough.id} contains a non-Livepeer provider invocation`);
-  const required = requiredCapabilities.map((capability) => invocations.find((invocation) => invocation.capability === capability && invocation.status === "SUCCEEDED" && invocation.provider === "livepeer"));
-  if (required.some((invocation) => !invocation)) fail(`${walkthrough.id} is missing a successful livepeer provider invocation`);
-  unique(invocations.map((invocation) => invocation.idempotencyKey), "provider invocation key");
   const segments = walkthrough.transcriptSegments.filter((segment) => segment.processingRunId === run.id);
+  let providerCapabilities;
+  try { providerCapabilities = validateRunProviderInvocations({ invocations, transcriptSegments: segments, processingRunId: run.id }); } catch (error) { fail(`${walkthrough.id} ${error instanceof Error ? error.message : String(error)}`); }
+  unique(invocations.map((invocation) => invocation.idempotencyKey), "provider invocation key");
   const candidates = walkthrough.visualCandidates.filter((candidate) => candidate.processingRunId === run.id);
   const observations = walkthrough.observations.filter((observation) => observation.processingRunId === run.id);
   unique(segments.map((segment) => `${segment.sourceAssetId}|${segment.startSeconds}|${segment.endSeconds}`), "transcript range");
@@ -55,6 +52,10 @@ for (const runRecord of input.runs) {
         select: {
           processingRunId: true,
           walkthroughId: true,
+          sourceStartSeconds: true,
+          sourceEndSeconds: true,
+          provider: true,
+          capability: true,
           providerInvocation: { select: { processingRunId: true, provider: true, capability: true, status: true } },
         },
       },
@@ -65,7 +66,7 @@ for (const runRecord of input.runs) {
     const sourceObservation = sourceObservations.get(observation.observationId);
     try { validateReportObservationEvidence({ observation, sourceObservation, segments, mediaById, walkthrough, processingRunId: run.id }); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
   }
-  verified.push({ walkthroughId: walkthrough.id, processingRunId: run.id, reportId: report.id, mode: "live", providerCapabilities: requiredCapabilities, finalStatus: run.status, findingCount: observations.length, reportFindingCount: report.observations.length, providerInvocationCount: invocations.length });
+  verified.push({ walkthroughId: walkthrough.id, processingRunId: run.id, reportId: report.id, mode: "live", providerCapabilities, finalStatus: run.status, findingCount: observations.length, reportFindingCount: report.observations.length, providerInvocationCount: invocations.length });
 }
 if (new Set(verified.map((record) => record.walkthroughId)).size !== 2) fail("two fresh walkthrough IDs were not verified");
 await mkdir(artifactDir, { recursive: true });

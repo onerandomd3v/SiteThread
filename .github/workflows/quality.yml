@@ -11,7 +11,6 @@ jobs:
     env:
       DATABASE_URL: postgresql://ci:ci@localhost:5432/sitethread
       R2_BUCKET_NAME: sitethread-ci
-      LIVEPEER_MCP_URL: https://agent.livepeer.org/api/mcp/raw
       MEDIA_PROVIDER_MODE: fixture
       PLAYWRIGHT_PORT: "3001"
     steps:

@@ -9,8 +9,8 @@ const configured = {
   R2_SECRET_ACCESS_KEY: "secret",
   TRIGGER_SECRET_KEY: "trigger",
   TRIGGER_PROJECT_REF: "project",
-  LIVEPEER_MCP_URL: "https://agent.livepeer.org/api/mcp/raw",
-  LIVEPEER_MCP_BEARER: "bearer",
+  GEMINI_API_KEY: "gemini-key",
+  GEMINI_MODEL: "gemini-3.8-flash",
   MEDIA_PROVIDER_MODE: "live",
   LIVE_REHEARSAL: "true",
   REHEARSAL_REFERENCE_VIDEO: "C:/media/reference.mp4",
@@ -21,11 +21,13 @@ const configured = {
 describe("live rehearsal configuration", () => {
   it("fails closed when live mode or required private services are missing", () => {
     expect(() => parseLiveRehearsalConfig({ ...configured, MEDIA_PROVIDER_MODE: "fixture" })).toThrow("refusing to run");
-    expect(() => parseLiveRehearsalConfig({ ...configured, LIVEPEER_MCP_BEARER: undefined })).toThrow("LIVEPEER_MCP_BEARER");
+    expect(() => parseLiveRehearsalConfig({ ...configured, GEMINI_API_KEY: undefined })).toThrow("GEMINI_API_KEY");
+    expect(() => parseLiveRehearsalConfig({ ...configured, GEMINI_MODEL: undefined })).toThrow("GEMINI_MODEL");
   });
 
   it("requires an explicit consented reference and returns the rehearsal base URL", () => {
     expect(parseLiveRehearsalConfig(configured).REHEARSAL_BASE_URL).toBe("http://localhost:3002");
+    expect(parseLiveRehearsalConfig(configured).GEMINI_MODEL).toBe("gemini-3.8-flash");
     expect(() => parseLiveRehearsalConfig({ ...configured, REHEARSAL_MEDIA_CONSENT: "unknown" })).toThrow("REHEARSAL_MEDIA_CONSENT");
     expect(() => parseLiveRehearsalConfig({ ...configured, REHEARSAL_DATABASE_CONSENT: "shared" })).toThrow("REHEARSAL_DATABASE_CONSENT");
   });
