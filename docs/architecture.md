@@ -427,6 +427,8 @@ This protects the architecture from changes to Livepeer's API surface during the
 
 COD-14 selected raw MCP as the runtime direction after real capability tests. Timestamped transcription and useful image understanding remain unresolved; this diagram does not imply the required media contracts are validated. See [the integration findings and gates before COD-17](livepeer-integration.md) before implementing the provider.
 
+**Current runtime note:** the implementation uses Livepeer Creative MCP for bounded transcription and Google Gemini for visual semantics. Observation reasoning is a separate provider-neutral `ObservationReasoner`; the hackathon configuration selects Groq `openai/gpt-oss-20b`. Provider selection and transport details stay behind the adapter factory. Strict provider JSON is parsed and checked again by the SiteThread Zod schema, and fixture mode remains deterministic.
+
 ---
 
 # 10. FFmpeg's Role

@@ -23,6 +23,9 @@ const serverEnvSchema = z.object({
   LIVEPEER_MCP_BEARER: optionalSecret,
   GEMINI_API_KEY: optionalSecret,
   GEMINI_MODEL: z.preprocess((value) => typeof value === "string" && value.trim() === "" ? undefined : value, z.string().trim().min(1).optional()),
+  REASONER_PROVIDER: z.preprocess((value) => typeof value === "string" && value.trim() === "" ? undefined : value, z.string().trim().min(1).optional()),
+  REASONER_MODEL: z.preprocess((value) => typeof value === "string" && value.trim() === "" ? undefined : value, z.string().trim().min(1).optional()),
+  GROQ_API_KEY: optionalSecret,
   MEDIA_PROVIDER_MODE: z.enum(["live", "fixture"]).default("fixture"),
 });
 

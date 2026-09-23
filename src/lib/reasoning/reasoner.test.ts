@@ -3,6 +3,7 @@ import { ProviderCallError } from "@/lib/livepeer/provider-errors";
 import { GEMINI_DEFAULT_MODEL } from "@/lib/livepeer/gemini";
 import { configuredObservationReasoner, FixtureObservationReasoner } from "./reasoner";
 import { GeminiObservationReasoner } from "./gemini";
+import { GroqObservationReasoner } from "./groq";
 import type { ObservationReasoningInput } from "./types";
 
 const apiKey = "gemini-test-key";
@@ -77,35 +78,76 @@ describe("observation reasoner", () => {
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "fixture");
     vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("REASONER_PROVIDER", "unknown");
+    vi.stubEnv("REASONER_MODEL", "unconfigured-model");
     expect(configuredObservationReasoner()).toBeInstanceOf(FixtureObservationReasoner);
   });
 
-  it("selects the Gemini implementation in live mode and never the legacy raw Livepeer adapter", () => {
+  it("selects the explicitly configured Groq implementation and never falls back to Gemini or raw Livepeer", () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
+    vi.stubEnv("REASONER_PROVIDER", "groq");
+    vi.stubEnv("REASONER_MODEL", "openai/gpt-oss-20b");
+    vi.stubEnv("GROQ_API_KEY", "groq-test-key");
+    vi.stubEnv("GEMINI_API_KEY", apiKey);
+    vi.stubEnv("LIVEPEER_MCP_URL", "https://agent.livepeer.org/api/mcp/raw");
+    const reasoner = configuredObservationReasoner();
+    expect(reasoner).toBeInstanceOf(GroqObservationReasoner);
+    expect(reasoner).not.toBeInstanceOf(GeminiObservationReasoner);
+  });
+
+  it("fails closed when live provider configuration is missing instead of falling back to Gemini", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
     vi.stubEnv("GEMINI_API_KEY", apiKey);
-    vi.stubEnv("GEMINI_MODEL", "gemini-configured-model");
-    vi.stubEnv("LIVEPEER_MCP_URL", "https://agent.livepeer.org/api/mcp/raw");
-    expect(configuredObservationReasoner()).toBeInstanceOf(GeminiObservationReasoner);
-  });
-
-  it("fails closed with Gemini attribution when live configuration is missing", () => {
-    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
-    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
-    vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
-    vi.stubEnv("GEMINI_API_KEY", "");
     try {
       configuredObservationReasoner();
-      throw new Error("Expected missing Gemini configuration to fail.");
+      throw new Error("Expected missing reasoner provider configuration to fail.");
     } catch (error) {
       expect(error).toBeInstanceOf(ProviderCallError);
       expect(error).toMatchObject({
         code: "PROVIDER_CONTRACT_UNRESOLVED",
         retryable: false,
-        attribution: { provider: "google-gemini", capability: "observation-reasoning" },
       });
     }
+  });
+
+  it.each(["unsupported-provider", ""])("fails closed for unsupported/blank reasoner provider %s", (provider) => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
+    vi.stubEnv("REASONER_PROVIDER", provider);
+    vi.stubEnv("REASONER_MODEL", "openai/gpt-oss-20b");
+    vi.stubEnv("GROQ_API_KEY", "groq-test-key");
+    expect(() => configuredObservationReasoner()).toThrow(expect.objectContaining({ code: "PROVIDER_CONTRACT_UNRESOLVED", retryable: false }));
+  });
+
+  it("requires the selected Groq key and model without substituting Gemini configuration", () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
+    vi.stubEnv("REASONER_PROVIDER", "groq");
+    vi.stubEnv("REASONER_MODEL", "openai/gpt-oss-20b");
+    vi.stubEnv("GEMINI_API_KEY", apiKey);
+    expect(() => configuredObservationReasoner()).toThrow(expect.objectContaining({
+      code: "PROVIDER_CONTRACT_UNRESOLVED",
+      retryable: false,
+      attribution: { provider: "groq", capability: "observation-reasoning" },
+    }));
+  });
+
+  it("requires a configured model for live reasoning", () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
+    vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
+    vi.stubEnv("REASONER_PROVIDER", "groq");
+    vi.stubEnv("GROQ_API_KEY", "groq-test-key");
+    expect(() => configuredObservationReasoner()).toThrow(expect.objectContaining({
+      code: "PROVIDER_CONTRACT_UNRESOLVED",
+      retryable: false,
+    }));
   });
 
   it("requests schema-constrained JSON, parses it explicitly, validates it with Zod, and records truthful sanitized provenance", async () => {
