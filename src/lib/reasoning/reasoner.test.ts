@@ -43,25 +43,20 @@ function requestBody(requests: Array<{ url: string; init?: RequestInit }>) {
     generationConfig: {
       maxOutputTokens: number;
       responseMimeType: string;
-      responseJsonSchema: Record<string, unknown>;
+      responseSchema: Record<string, unknown>;
       thinkingConfig?: { thinkingLevel?: string; thinkingBudget?: number };
     };
   };
 }
 
-const generateContentSchemaKeys = new Set([
-  "type", "properties", "required", "additionalProperties", "enum", "items",
-  "minItems", "maxItems", "minimum", "maximum", "description", "title",
-]);
-
-function collectGenerateContentSchemaKeys(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap(collectGenerateContentSchemaKeys);
+function collectSchemaKeys(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(collectSchemaKeys);
   if (!value || typeof value !== "object") return [];
   return Object.entries(value).flatMap(([key, child]) => {
     if (key === "properties" && child && typeof child === "object" && !Array.isArray(child)) {
-      return [key, ...Object.values(child).flatMap(collectGenerateContentSchemaKeys)];
+      return [key, ...Object.values(child).flatMap(collectSchemaKeys)];
     }
-    return [key, ...collectGenerateContentSchemaKeys(child)];
+    return [key, ...collectSchemaKeys(child)];
   });
 }
 
@@ -117,7 +112,7 @@ describe("observation reasoner", () => {
     const { provider, requests } = mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "Water is visible and reported at the north doorway.", evidenceRefs: ["T0", "V0"] }] }));
     const result = await provider.extract(input);
     const body = requestBody(requests);
-    const schema = body.generationConfig.responseJsonSchema;
+    const schema = body.generationConfig.responseSchema;
     const observationSchema = (schema.properties as Record<string, Record<string, unknown>>).observations;
     const itemSchema = observationSchema.items as Record<string, unknown>;
     const observationProperties = itemSchema.properties as Record<string, Record<string, unknown>>;
@@ -126,16 +121,20 @@ describe("observation reasoner", () => {
     expect(requests[0].url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent");
     expect(new Headers(requests[0].init?.headers).get("x-goog-api-key")).toBe(apiKey);
     expect(body.generationConfig.responseMimeType).toBe("application/json");
-    expect(body.generationConfig).toHaveProperty("responseJsonSchema");
-    expect(body.generationConfig).not.toHaveProperty("responseSchema");
+    expect(body.generationConfig).toHaveProperty("responseSchema");
+    expect(body.generationConfig).not.toHaveProperty("responseJsonSchema");
     expect(body.generationConfig).not.toHaveProperty("responseFormat");
-    expect(collectGenerateContentSchemaKeys(schema).every((key) => generateContentSchemaKeys.has(key))).toBe(true);
+    expect(collectSchemaKeys(schema).every((key) => ["type", "properties", "required", "enum", "items"].includes(key))).toBe(true);
+    expect(collectSchemaKeys(schema)).not.toContain("additionalProperties");
     expect(body.generationConfig.maxOutputTokens).toBe(4_096);
-    expect(schema).toMatchObject({ type: "object", required: ["observations"], additionalProperties: false });
-    expect(observationSchema.maxItems).toBe(20);
-    expect(itemSchema).toMatchObject({ type: "object", additionalProperties: false, required: ["type", "description", "evidenceRefs"] });
+    expect(schema).toMatchObject({ type: "OBJECT", required: ["observations"] });
+    expect(observationSchema.type).toBe("ARRAY");
+    expect(itemSchema).toMatchObject({ type: "OBJECT", required: ["type", "description", "evidenceRefs"] });
+    expect(observationProperties.type.type).toBe("STRING");
     expect(observationProperties.type.enum).toEqual(["progress", "potential_issue", "action", "note"]);
-    expect(observationProperties.confidence).toMatchObject({ minimum: 0, maximum: 1 });
+    expect(observationProperties.confidence.type).toBe("NUMBER");
+    expect(observationProperties.evidenceRefs.type).toBe("ARRAY");
+    expect((observationProperties.evidenceRefs.items as Record<string, unknown>).type).toBe("STRING");
     expect((observationProperties.evidenceRefs.items as Record<string, unknown>).enum).toEqual(["T0", "V0"]);
     expect(result.value.observations[0]).toMatchObject({ type: "note", evidenceRefs: ["T0", "V0"] });
     expect(result.diagnostic).toMatchObject({
@@ -226,11 +225,26 @@ describe("observation reasoner", () => {
     const { provider, requests } = mockedProvider(JSON.stringify({ observations: [] }));
     await expect(provider.extract({ idempotencyKey: "empty-evidence-key", evidence: [] })).resolves.toMatchObject({ value: { observations: [] } });
     const body = requestBody(requests);
-    const schema = body.generationConfig.responseJsonSchema;
+    const schema = body.generationConfig.responseSchema;
     const rootProperties = schema.properties as Record<string, unknown>;
     const observationArray = rootProperties.observations as { items: { properties: Record<string, Record<string, unknown>> } };
     const observationProperties = observationArray.items.properties;
     expect(observationProperties.evidenceRefs.items).not.toHaveProperty("enum");
+  });
+
+  it("limits provider evidence-ref enums to the exact invocation", async () => {
+    const { provider, requests } = mockedProvider(JSON.stringify({ observations: [] }));
+    await provider.extract({
+      idempotencyKey: "scoped-evidence-key",
+      evidence: [{ ref: "V9", kind: "visual", text: "A temporary fence is visible." }],
+    });
+    const schema = requestBody(requests).generationConfig.responseSchema;
+    const rootProperties = schema.properties as Record<string, unknown>;
+    const observationArray = rootProperties.observations as { items: { properties: Record<string, Record<string, unknown>> } };
+    const observationProperties = observationArray.items.properties;
+    expect((observationProperties.evidenceRefs.items as Record<string, unknown>).enum).toEqual(["V9"]);
+    expect(JSON.stringify(schema)).not.toContain("T0");
+    expect(JSON.stringify(schema)).not.toContain("V0");
   });
 
   it("rejects malformed JSON and schema-invalid output", async () => {
@@ -242,6 +256,10 @@ describe("observation reasoner", () => {
     await expect(mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "", evidenceRefs: ["V0"] }] })).provider.extract(input))
       .rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID", retryable: false });
     await expect(mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "x".repeat(601), evidenceRefs: ["V0"] }] })).provider.extract(input))
+      .rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID", retryable: false });
+    await expect(mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "Water is visible.", confidence: 1.1, evidenceRefs: ["V0"] }] })).provider.extract(input))
+      .rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID", retryable: false });
+    await expect(mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "Water is visible.", evidenceRefs: ["invalid-ref"] }] })).provider.extract(input))
       .rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID", retryable: false });
   });
 
@@ -277,7 +295,7 @@ describe("observation reasoner", () => {
 
   it("retains useful safe Google error details but drops arbitrary provider fields", async () => {
     const body = Response.json({
-      error: { code: 400, status: "INVALID_ARGUMENT", message: "Invalid value at generationConfig.responseJsonSchema." },
+      error: { code: 400, status: "INVALID_ARGUMENT", message: "Invalid value at generationConfig.responseSchema." },
       prompt: input.evidence[0].text,
       request: { headers: { "x-goog-api-key": apiKey }, body: { contents: input.evidence } },
       endpoint: "https://private.example/request?token=secret",
@@ -298,7 +316,7 @@ describe("observation reasoner", () => {
         httpStatus: 400,
         providerErrorCode: 400,
         providerStatus: "INVALID_ARGUMENT",
-        providerMessage: "Invalid value at generationConfig.responseJsonSchema.",
+        providerMessage: "Invalid value at generationConfig.responseSchema.",
       },
     });
     expect(body.bodyUsed).toBe(true);

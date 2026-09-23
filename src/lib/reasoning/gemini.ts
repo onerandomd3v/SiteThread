@@ -41,38 +41,43 @@ const responseSchema = z.object({
   usageMetadata: z.record(z.string(), z.unknown()).optional(),
 }).passthrough();
 
-type JsonSchemaValue = null | boolean | number | string | JsonSchemaValue[] | { [key: string]: JsonSchemaValue };
-type JsonSchemaObject = { [key: string]: JsonSchemaValue };
+type GenerateContentSchema = {
+  type: "OBJECT" | "ARRAY" | "STRING" | "NUMBER";
+  properties?: Record<string, GenerateContentSchema>;
+  required?: string[];
+  items?: GenerateContentSchema;
+  enum?: string[];
+};
 
-const GENERATE_CONTENT_SCHEMA_KEYS = new Set([
-  "type", "properties", "required", "additionalProperties", "enum", "items",
-  "minItems", "maxItems", "minimum", "maximum", "description", "title",
-]);
-
-function toGenerateContentSchema(value: JsonSchemaValue): JsonSchemaValue {
-  if (Array.isArray(value)) return value.map(toGenerateContentSchema);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => GENERATE_CONTENT_SCHEMA_KEYS.has(key))
-      .map(([key, child]) => [key, key === "properties" && child && typeof child === "object" && !Array.isArray(child)
-        ? Object.fromEntries(Object.entries(child).map(([name, property]) => [name, toGenerateContentSchema(property)]))
-        : toGenerateContentSchema(child)]),
-  );
-}
-
-function generateContentOutputSchema(evidenceRefs: string[]): JsonSchemaObject {
-  const sourceSchema = z.toJSONSchema(ObservationReasoningOutputSchema, { target: "draft-07" }) as unknown as JsonSchemaValue;
-  const schema = toGenerateContentSchema(sourceSchema) as JsonSchemaObject;
-  const properties = schema.properties as JsonSchemaObject;
-  const observationItems = properties.observations as JsonSchemaObject;
-  const observationSchema = observationItems.items as JsonSchemaObject;
-  const observationProperties = observationSchema.properties as JsonSchemaObject;
-  const references = observationProperties.evidenceRefs as JsonSchemaObject;
-  const referenceSchema = references.items as JsonSchemaObject;
+function generateContentResponseSchema(evidenceRefs: string[]): GenerateContentSchema {
   const allowedRefs = [...new Set(evidenceRefs)];
-  if (allowedRefs.length > 0) referenceSchema.enum = allowedRefs;
-  return schema;
+  const evidenceRefSchema: GenerateContentSchema = {
+    type: "STRING",
+    ...(allowedRefs.length > 0 ? { enum: allowedRefs } : {}),
+  };
+
+  return {
+    type: "OBJECT",
+    properties: {
+      observations: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            type: { type: "STRING", enum: ["progress", "potential_issue", "action", "note"] },
+            description: { type: "STRING" },
+            location: { type: "STRING" },
+            trade: { type: "STRING" },
+            confidence: { type: "NUMBER" },
+            suggestedAction: { type: "STRING" },
+            evidenceRefs: { type: "ARRAY", items: evidenceRefSchema },
+          },
+          required: ["type", "description", "evidenceRefs"],
+        },
+      },
+    },
+    required: ["observations"],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -211,7 +216,7 @@ export class GeminiObservationReasoner implements ObservationReasoner {
         maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
         ...(modelThinkingConfig ? { thinkingConfig: modelThinkingConfig } : {}),
         responseMimeType: "application/json",
-        responseJsonSchema: generateContentOutputSchema(evidence.map(({ ref }) => ref)),
+        responseSchema: generateContentResponseSchema(evidence.map(({ ref }) => ref)),
       },
     };
 
