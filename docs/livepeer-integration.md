@@ -4,7 +4,7 @@
 >
 > **Validation dates:** 2026-09-17 UTC (COD-14); 2026-09-17 UTC / 2026-09-18 local (COD-32)
 >
-> **Status:** COD-176 selects the official creative MCP for bounded transcription. COD-177 adds a separate Google Gemini visual-semantic provider for bounded six-second evidence clips. COD-178 implements a Gemini-backed `ObservationReasoner` with strict local grounding; its one-shot live smoke remains pending provider availability.
+> **Status:** COD-176 selects the official creative MCP for bounded transcription. COD-177 adds a separate Google Gemini visual-semantic provider for bounded six-second evidence clips. COD-178 keeps observation reasoning behind a provider-neutral `ObservationReasoner`; the hackathon configuration selects Groq's `openai/gpt-oss-20b` with strict JSON Schema and local grounding. No live reasoning smoke has been run for this adapter.
 >
 > **Scope:** Integration decision and validation findings. No COD-17 pipeline implementation.
 
@@ -12,7 +12,7 @@
 
 The earlier COD-32 raw-MCP decision remains historical. The current hackathon path uses `https://agent.livepeer.org/api/mcp/creative` through the SiteThread-owned transcription boundary in the Trigger.dev worker. The creative SDK client sends no Authorization header, performs pricing/balance preflight, uses short-lived signed R2 URLs, and closes each MCP session.
 
-COD-176 freezes one proven live contract: exact six-second FFmpeg source windows sent to creative `transcribe` with `granularity: "segment"`. Returned text is normalized without manufacturing cues, SRT, or provider timestamps; SiteThread's original window remains authoritative. `find_moments` is not part of the live path, and no validated creative async semantic-video route exists. Visual semantics and observation reasoning use separate Google Gemini adapters and are never attributed to Livepeer.
+COD-176 freezes one proven live contract: exact six-second FFmpeg source windows sent to creative `transcribe` with `granularity: "segment"`. Returned text is normalized without manufacturing cues, SRT, or provider timestamps; SiteThread's original window remains authoritative. `find_moments` is not part of the live path, and no validated creative async semantic-video route exists. Visual semantics use Google Gemini; observation reasoning is independently configured behind its own SiteThread interface. Neither is attributed to Livepeer.
 
 ### COD-176 responsibility split
 
@@ -20,7 +20,7 @@ COD-176 freezes one proven live contract: exact six-second FFmpeg source windows
 Creative MCP transcribe → bounded transcript text
 FFmpeg + private R2   → deterministic derivatives and evidence assets
 Google Gemini          → bounded visual-semantic prose from inline MP4 bytes
-Google Gemini          → strict JSON observation reasoning over labeled SiteThread evidence
+Configured reasoner     → strict JSON observations over labeled SiteThread evidence
 SiteThread              → source ranges, provenance, idempotency, review, reports
 ```
 
@@ -34,7 +34,9 @@ The earlier blanket rejection of MCP as a production runtime was unsupported. MC
 
 - **Transcription:** Livepeer Creative MCP, using bounded six-second windows and SiteThread-owned source timing.
 - **Visual semantics:** the Google Gemini adapter, using bounded evidence clips. There is no Marlin or raw-Livepeer visual fallback.
-- **Observation reasoning:** a Google Gemini adapter behind SiteThread's `ObservationReasoner` interface. It receives normalized labeled transcript/visual evidence only, requests schema-constrained JSON, re-parses and validates with `ObservationReasoningOutputSchema`, and rejects references not present in that invocation. The model and raw Livepeer `gemini-text` are not exposed to core orchestration. Ambiguous delivery is non-retryable; rate limiting is explicitly retryable, and there is no provider/model fallback.
+- **Observation reasoning:** SiteThread's `ObservationReasoner` interface selects an explicitly configured adapter. The hackathon configuration is Groq `openai/gpt-oss-20b` with strict JSON Schema. The adapter receives normalized labeled transcript/visual evidence only, re-parses and validates with `ObservationReasoningOutputSchema`, and rejects references not present in that invocation. Provider/model details are not exposed to core orchestration. Ambiguous delivery is non-retryable; explicit transient HTTP responses are classified for the bounded caller retry policy, and there is no provider/model fallback.
+
+For the Groq hackathon configuration, set server-only `REASONER_PROVIDER=groq`, `REASONER_MODEL=openai/gpt-oss-20b`, and `GROQ_API_KEY`. Fixture mode continues to select deterministic fixtures before inspecting live reasoner configuration. Missing or unsupported live reasoner settings fail closed with `PROVIDER_CONTRACT_UNRESOLVED`. The adapter follows Groq's GPT-OSS guidance to place instructions in a user message, while clearly separating untrusted evidence data, and disables returned reasoning content. Groq diagnostics retain only provider/model identifiers, response ID, finish reason, allowlisted token usage, latency, and SiteThread idempotency key; they never store the API key, request headers, prompts, evidence text, or raw response body. Strict-mode nullable optional fields are normalized, then the SiteThread Zod schema remains authoritative.
 
 The raw-MCP and Marlin material below records earlier investigations only. It is not the selected or required production path.
 
@@ -235,7 +237,7 @@ Displayed rates before execution were $0.00014/second for Nemotron ASR, $0.00007
 | Image candidate: `nemotron-omni` | `nvidia/nemotron-3-nano-omni` | Prompt, `source_url`, `inputs.image_url`, `reasoning_mode: "no_think"`, `max_tokens: 200`, `temperature: 0` | Returned a JSON string reporting unavailable image access. The registered base model must not be assumed to use the separate upstream vision route. |
 | Video candidate: `marlin-video` | `fal-ai/marlin` | `inputs.video_url`, documented spatial/event prompt, `max_tokens: 200`, `do_sample: false` | `get_create_media` returned `status: "done"` and `run_output.result: { text, model_id }`. Text contained scene prose and time-ranged events. Verified video-understanding candidate; direct image/frame contract remains unselected. |
 
-**Historical COD-18 proposal (superseded by COD-178):** use the discovered raw Livepeer `gemini-text` capability as a text reasoning step. That route is not selected or used by the current implementation. Live observation reasoning uses the Google Gemini adapter behind `ObservationReasoner`; raw `gemini-text` remains only as archived investigation context.
+**Historical COD-18 proposal (superseded by COD-178):** use the discovered raw Livepeer `gemini-text` capability as a text reasoning step. That route is not selected or used by the current implementation. Live observation reasoning uses the explicitly configured adapter behind `ObservationReasoner` (Groq for the hackathon); raw `gemini-text` remains only as archived investigation context.
 
 The synchronous ASR/Gemini/Omni probes used `async: false` and `timeout: 60`. Whisper used `async: true` and `timeout: 120`; Marlin used `async: true` and `timeout: 260`. All used `persist: false`, an application `session_id`, and a unique `idempotency_key` per logical request. The temporary client had a separate 90-second HTTP deadline, which was not reached; asynchronous inference continued independently of its submission request.
 
@@ -436,7 +438,7 @@ Vision text may contain Markdown fences or malformed JSON. Validate any extracte
 | Livepeer Creative MCP | Bounded transcription windows |
 | Google Gemini adapter | Visual semantics from bounded evidence clips |
 | Trigger.dev | Durable orchestration, bounded polling, retry policy and job history |
-| Google Gemini via `ObservationReasoner` | Strict grounded JSON observation reasoning; one-shot live smoke remains pending provider availability |
+| Configured provider via `ObservationReasoner` (Groq for hackathon) | Strict grounded JSON observation reasoning; Groq live smoke remains pending |
 | SiteThread normalization | Validate provider results, preserve source ranges and provenance, and prepare reviewable drafts |
 
 The generated probe uploads were publicly readable hosted media, **not a validation of private R2 signed URLs**. Keep construction media private by default. In the current COD-17 flow, issue short-lived signed GET URLs only for bounded derivatives and never persist or log them: Creative MCP receives the bounded audio URL, while SiteThread fetches the visual clip from R2 and sends Gemini the bytes rather than the URL. The former requirement for Livepeer to fetch signed video clips is historical.
@@ -485,7 +487,7 @@ The following gates were written for the former raw-MCP/Marlin proposal and are 
 4. **Operational envelope:** reconcile actual account charges, rate/concurrency limits, retention, and the six-clip maximum. The current per-call prices are estimates, and three failed async Marlin jobs were still attributed $0.0474.
 5. **Marlin async probe:** the COD-32 async Marlin result did not validate. The proposed synchronous workaround was superseded by COD-177; Marlin is not used by the current visual route.
 
-**Current runtime contract:** Livepeer Creative MCP handles bounded transcription; separate Google Gemini adapters handle visual semantics and strict observation reasoning. Fail clearly when a selected provider is unavailable, keep fixture mode explicit, and do not introduce a Marlin/raw-Livepeer visual fallback or raw `gemini-text` reasoning path.
+**Current runtime contract:** Livepeer Creative MCP handles bounded transcription, Google Gemini handles visual semantics, and the provider-neutral `ObservationReasoner` selects Groq for hackathon observation reasoning. Fail clearly when a selected provider is unavailable, keep fixture mode explicit, and do not introduce a Marlin/raw-Livepeer visual fallback or raw `gemini-text` reasoning path.
 
 Only durable findings and the minimal implementation contract belong in this change. Validation for this spike consists of real provider probes, primary-source checks, repository checks, and complete diff/secret-scope inspection.
 
