@@ -1,10 +1,11 @@
 const RUN_PROVIDER_CONTRACTS = new Map([
   ["creative/transcribe", "livepeer"],
   ["gemini-video-understanding", "google-gemini"],
-  ["observation-reasoning", "google-gemini"],
+  ["observation-reasoning", "groq"],
 ]);
 
 const SUPERSEDED_CAPABILITIES = new Set(["nemotron-asr", "marlin-video", "gemini-text"]);
+const REHEARSAL_REASONER_MODEL = "openai/gpt-oss-20b";
 
 export function validateReportArtifactBinding(reportId, artifactReportId) {
   if (reportId !== artifactReportId) throw new Error("report ID does not match the browser rehearsal artifact");
@@ -19,6 +20,14 @@ export function validateRunProviderInvocations({ invocations, transcriptSegments
     const expectedProvider = RUN_PROVIDER_CONTRACTS.get(invocation.capability);
     if (!expectedProvider) throw new Error(`current run contains unsupported provider capability ${invocation.capability}`);
     if (invocation.provider !== expectedProvider) throw new Error(`${invocation.capability} must use ${expectedProvider}`);
+    if (invocation.capability === "observation-reasoning") {
+      const metadata = invocation.rawResponse;
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)
+        || metadata.model !== REHEARSAL_REASONER_MODEL
+        || metadata.servedModel !== REHEARSAL_REASONER_MODEL) {
+        throw new Error(`observation-reasoning must use configured and served model ${REHEARSAL_REASONER_MODEL}`);
+      }
+    }
   }
 
   for (const [capability, provider] of RUN_PROVIDER_CONTRACTS) {

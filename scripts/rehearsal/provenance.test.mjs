@@ -7,7 +7,7 @@ const baseObservation = { reviewState: "CONFIRMED", evidence: [{ sourceWalkthrou
 const currentRunInvocations = [
   { processingRunId: "run-1", provider: "livepeer", capability: "creative/transcribe", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6 },
   { processingRunId: "run-1", provider: "google-gemini", capability: "gemini-video-understanding", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6 },
-  { processingRunId: "run-1", provider: "google-gemini", capability: "observation-reasoning", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6 },
+  { processingRunId: "run-1", provider: "groq", capability: "observation-reasoning", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6, rawResponse: { model: "openai/gpt-oss-20b", servedModel: "openai/gpt-oss-20b" } },
 ];
 
 describe("live rehearsal provenance assertions", () => {
@@ -42,17 +42,22 @@ describe("live rehearsal provenance assertions", () => {
     expect(() => validateReportObservationEvidence({ observation: { ...visualObservation, evidence: [{ ...visualObservation.evidence[0], sourceStartSeconds: 12, sourceEndSeconds: 12 }] }, sourceObservation: visualSource, segments: [], mediaById: new Map([["clip-1", asset]]), walkthrough, processingRunId: "run-1" })).toThrow(/valid source range/);
   });
 
-  it("requires current-run provider-specific provenance without a blanket Livepeer assertion", () => {
+  it("requires current-run provider-specific provenance and the configured Groq reasoner model", () => {
     const segments = [{ processingRunId: "run-1", startSeconds: 0, endSeconds: 6 }];
     expect(validateRunProviderInvocations({ invocations: currentRunInvocations, transcriptSegments: segments, processingRunId: "run-1" })).toEqual([
       { capability: "creative/transcribe", provider: "livepeer" },
       { capability: "gemini-video-understanding", provider: "google-gemini" },
-      { capability: "observation-reasoning", provider: "google-gemini" },
+      { capability: "observation-reasoning", provider: "groq" },
     ]);
     expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 1 ? { ...item, processingRunId: "run-old" } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/another processing run/);
     expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 1 ? { ...item, capability: "marlin-video", provider: "livepeer" } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/superseded capability marlin-video/);
     expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 2 ? { ...item, capability: "gemini-text", provider: "livepeer" } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/superseded capability gemini-text/);
     expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 0 ? { ...item, provider: "google-gemini" } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/must use livepeer/);
+    expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 2 ? { ...item, provider: "google-gemini" } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/must use groq/);
+    expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 2 ? { ...item, provider: "fixture" } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/must use groq/);
+    expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 2 ? { ...item, rawResponse: { ...item.rawResponse, model: "openai/gpt-oss-120b", servedModel: "openai/gpt-oss-120b" } } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/configured and served model/);
+    expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 2 ? { ...item, rawResponse: { ...item.rawResponse, servedModel: "openai/gpt-oss-120b" } } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/configured and served model/);
+    expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations.map((item, index) => index === 2 ? { ...item, rawResponse: { model: "openai/gpt-oss-20b" } } : item), transcriptSegments: segments, processingRunId: "run-1" })).toThrow(/configured and served model/);
     expect(() => validateRunProviderInvocations({ invocations: currentRunInvocations, transcriptSegments: [{ ...segments[0], endSeconds: 12 }], processingRunId: "run-1" })).toThrow(/source-window/);
   });
 

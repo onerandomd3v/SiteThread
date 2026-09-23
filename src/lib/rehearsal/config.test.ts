@@ -11,6 +11,9 @@ const configured = {
   TRIGGER_PROJECT_REF: "project",
   GEMINI_API_KEY: "gemini-key",
   GEMINI_MODEL: "gemini-3.8-flash",
+  REASONER_PROVIDER: "groq",
+  REASONER_MODEL: "openai/gpt-oss-20b",
+  GROQ_API_KEY: "groq-key",
   MEDIA_PROVIDER_MODE: "live",
   LIVE_REHEARSAL: "true",
   REHEARSAL_REFERENCE_VIDEO: "C:/media/reference.mp4",
@@ -23,11 +26,18 @@ describe("live rehearsal configuration", () => {
     expect(() => parseLiveRehearsalConfig({ ...configured, MEDIA_PROVIDER_MODE: "fixture" })).toThrow("refusing to run");
     expect(() => parseLiveRehearsalConfig({ ...configured, GEMINI_API_KEY: undefined })).toThrow("GEMINI_API_KEY");
     expect(() => parseLiveRehearsalConfig({ ...configured, GEMINI_MODEL: undefined })).toThrow("GEMINI_MODEL");
+    expect(() => parseLiveRehearsalConfig({ ...configured, GROQ_API_KEY: undefined })).toThrow("GROQ_API_KEY");
+    expect(() => parseLiveRehearsalConfig({ ...configured, REASONER_PROVIDER: undefined })).toThrow("REASONER_PROVIDER");
+    expect(() => parseLiveRehearsalConfig({ ...configured, REASONER_MODEL: undefined })).toThrow("REASONER_MODEL");
+    expect(() => parseLiveRehearsalConfig({ ...configured, REASONER_PROVIDER: "google-gemini" })).toThrow("REASONER_PROVIDER");
+    expect(() => parseLiveRehearsalConfig({ ...configured, REASONER_MODEL: "openai/gpt-oss-120b" })).toThrow("REASONER_MODEL");
   });
 
   it("requires an explicit consented reference and returns the rehearsal base URL", () => {
     expect(parseLiveRehearsalConfig(configured).REHEARSAL_BASE_URL).toBe("http://localhost:3002");
     expect(parseLiveRehearsalConfig(configured).GEMINI_MODEL).toBe("gemini-3.8-flash");
+    expect(parseLiveRehearsalConfig(configured).REASONER_PROVIDER).toBe("groq");
+    expect(parseLiveRehearsalConfig(configured).REASONER_MODEL).toBe("openai/gpt-oss-20b");
     expect(() => parseLiveRehearsalConfig({ ...configured, REHEARSAL_MEDIA_CONSENT: "unknown" })).toThrow("REHEARSAL_MEDIA_CONSENT");
     expect(() => parseLiveRehearsalConfig({ ...configured, REHEARSAL_DATABASE_CONSENT: "shared" })).toThrow("REHEARSAL_DATABASE_CONSENT");
   });
