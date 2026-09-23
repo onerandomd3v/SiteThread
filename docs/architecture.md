@@ -374,7 +374,9 @@ Never store large video blobs inside PostgreSQL.
 
 # 9. Livepeer Integration
 
-Livepeer is SiteThread's core media-intelligence provider.
+> **Historical COD-14 proposal, not the current runtime:** the Livepeer responsibilities and raw-MCP adapter direction below record an earlier investigation. Current runtime uses Livepeer Creative MCP for bounded transcription, Google Gemini for visual semantics, and a separately configured `ObservationReasoner` (Groq for the hackathon). There is no raw-Livepeer or Marlin visual fallback.
+
+The following Livepeer responsibilities and adapter sketch are historical context only.
 
 ## 9.1 Livepeer responsibilities
 

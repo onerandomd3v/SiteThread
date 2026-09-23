@@ -74,7 +74,7 @@ describe("observation reasoner", () => {
   });
 
   it("selects fixtures in fixture mode even when live credentials are absent", () => {
-    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("DATABASE_URL", "postgresql://localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "fixture");
     vi.stubEnv("GEMINI_API_KEY", "");
@@ -84,7 +84,7 @@ describe("observation reasoner", () => {
   });
 
   it("selects the explicitly configured Groq implementation and never falls back to Gemini or raw Livepeer", () => {
-    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("DATABASE_URL", "postgresql://localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
     vi.stubEnv("REASONER_PROVIDER", "groq");
@@ -98,9 +98,12 @@ describe("observation reasoner", () => {
   });
 
   it("fails closed when live provider configuration is missing instead of falling back to Gemini", () => {
-    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("DATABASE_URL", "postgresql://localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
+    vi.stubEnv("REASONER_PROVIDER", "");
+    vi.stubEnv("REASONER_MODEL", "");
+    vi.stubEnv("GROQ_API_KEY", "");
     vi.stubEnv("GEMINI_API_KEY", apiKey);
     try {
       configuredObservationReasoner();
@@ -115,7 +118,7 @@ describe("observation reasoner", () => {
   });
 
   it.each(["unsupported-provider", ""])("fails closed for unsupported/blank reasoner provider %s", (provider) => {
-    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("DATABASE_URL", "postgresql://localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
     vi.stubEnv("REASONER_PROVIDER", provider);
@@ -125,11 +128,12 @@ describe("observation reasoner", () => {
   });
 
   it("requires the selected Groq key and model without substituting Gemini configuration", () => {
-    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("DATABASE_URL", "postgresql://localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
     vi.stubEnv("REASONER_PROVIDER", "groq");
     vi.stubEnv("REASONER_MODEL", "openai/gpt-oss-20b");
+    vi.stubEnv("GROQ_API_KEY", "");
     vi.stubEnv("GEMINI_API_KEY", apiKey);
     expect(() => configuredObservationReasoner()).toThrow(expect.objectContaining({
       code: "PROVIDER_CONTRACT_UNRESOLVED",
@@ -139,10 +143,11 @@ describe("observation reasoner", () => {
   });
 
   it("requires a configured model for live reasoning", () => {
-    vi.stubEnv("DATABASE_URL", "postgresql://user:password@localhost:5432/sitethread");
+    vi.stubEnv("DATABASE_URL", "postgresql://localhost:5432/sitethread");
     vi.stubEnv("R2_BUCKET_NAME", "sitethread-media");
     vi.stubEnv("MEDIA_PROVIDER_MODE", "live");
     vi.stubEnv("REASONER_PROVIDER", "groq");
+    vi.stubEnv("REASONER_MODEL", "");
     vi.stubEnv("GROQ_API_KEY", "groq-test-key");
     expect(() => configuredObservationReasoner()).toThrow(expect.objectContaining({
       code: "PROVIDER_CONTRACT_UNRESOLVED",
