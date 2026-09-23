@@ -207,7 +207,7 @@ export class GeminiObservationReasoner implements ObservationReasoner {
         maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
         ...(modelThinkingConfig ? { thinkingConfig: modelThinkingConfig } : {}),
         responseMimeType: "application/json",
-        responseSchema: generateContentOutputSchema(evidence.map(({ ref }) => ref)),
+        responseJsonSchema: generateContentOutputSchema(evidence.map(({ ref }) => ref)),
       },
     };
 

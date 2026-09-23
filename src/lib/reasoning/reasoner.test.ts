@@ -43,7 +43,7 @@ function requestBody(requests: Array<{ url: string; init?: RequestInit }>) {
     generationConfig: {
       maxOutputTokens: number;
       responseMimeType: string;
-      responseSchema: Record<string, unknown>;
+      responseJsonSchema: Record<string, unknown>;
       thinkingConfig?: { thinkingLevel?: string; thinkingBudget?: number };
     };
   };
@@ -117,7 +117,7 @@ describe("observation reasoner", () => {
     const { provider, requests } = mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "Water is visible and reported at the north doorway.", evidenceRefs: ["T0", "V0"] }] }));
     const result = await provider.extract(input);
     const body = requestBody(requests);
-    const schema = body.generationConfig.responseSchema;
+    const schema = body.generationConfig.responseJsonSchema;
     const observationSchema = (schema.properties as Record<string, Record<string, unknown>>).observations;
     const itemSchema = observationSchema.items as Record<string, unknown>;
     const observationProperties = itemSchema.properties as Record<string, Record<string, unknown>>;
@@ -126,6 +126,8 @@ describe("observation reasoner", () => {
     expect(requests[0].url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent");
     expect(new Headers(requests[0].init?.headers).get("x-goog-api-key")).toBe(apiKey);
     expect(body.generationConfig.responseMimeType).toBe("application/json");
+    expect(body.generationConfig).toHaveProperty("responseJsonSchema");
+    expect(body.generationConfig).not.toHaveProperty("responseSchema");
     expect(body.generationConfig).not.toHaveProperty("responseFormat");
     expect(collectGenerateContentSchemaKeys(schema).every((key) => generateContentSchemaKeys.has(key))).toBe(true);
     expect(body.generationConfig.maxOutputTokens).toBe(4_096);
@@ -224,7 +226,7 @@ describe("observation reasoner", () => {
     const { provider, requests } = mockedProvider(JSON.stringify({ observations: [] }));
     await expect(provider.extract({ idempotencyKey: "empty-evidence-key", evidence: [] })).resolves.toMatchObject({ value: { observations: [] } });
     const body = requestBody(requests);
-    const schema = body.generationConfig.responseSchema;
+    const schema = body.generationConfig.responseJsonSchema;
     const rootProperties = schema.properties as Record<string, unknown>;
     const observationArray = rootProperties.observations as { items: { properties: Record<string, Record<string, unknown>> } };
     const observationProperties = observationArray.items.properties;
@@ -275,7 +277,7 @@ describe("observation reasoner", () => {
 
   it("retains useful safe Google error details but drops arbitrary provider fields", async () => {
     const body = Response.json({
-      error: { code: 400, status: "INVALID_ARGUMENT", message: "Invalid value at generationConfig.responseSchema." },
+      error: { code: 400, status: "INVALID_ARGUMENT", message: "Invalid value at generationConfig.responseJsonSchema." },
       prompt: input.evidence[0].text,
       request: { headers: { "x-goog-api-key": apiKey }, body: { contents: input.evidence } },
       endpoint: "https://private.example/request?token=secret",
@@ -296,7 +298,7 @@ describe("observation reasoner", () => {
         httpStatus: 400,
         providerErrorCode: 400,
         providerStatus: "INVALID_ARGUMENT",
-        providerMessage: "Invalid value at generationConfig.responseSchema.",
+        providerMessage: "Invalid value at generationConfig.responseJsonSchema.",
       },
     });
     expect(body.bodyUsed).toBe(true);
