@@ -89,7 +89,9 @@ The read-only verifier checks successful provider/capability provenance on each 
 
 ## Artifacts and failure policy
 
-Sanitized records and local PDFs are written under ignored `.rehearsal/`. They contain IDs, fingerprints, timings, provider mode, counts, and safe statuses only. They must not contain media paths, signed URLs, credentials, bearer tokens, prompts, transcript contents, finding text, or raw provider responses.
+Sanitized metadata records are written under ignored `.rehearsal/`. They contain only IDs, timings, counts, provider mode, and safe statuses. They must not contain media paths, signed URLs, credentials, bearer tokens, prompts, transcript contents, finding text, or raw provider responses.
+
+Report PDFs are also written under `.rehearsal/` and may contain reviewed finding text and transcript excerpts. Keep them private and never share them as sanitized artifacts.
 
 Fixture mode is an explicit local/demo mode only. Any required provider failure is a failed live rehearsal; the harness never switches provider, model, or mode and never fabricates successful provenance. A previous successful run may be shown during an outage only when identified as a prior run.
 
