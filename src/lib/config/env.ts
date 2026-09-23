@@ -21,6 +21,8 @@ const serverEnvSchema = z.object({
   LIVEPEER_MCP_URL: optionalUrl,
   LIVEPEER_CREATIVE_MCP_URL: optionalUrl,
   LIVEPEER_MCP_BEARER: optionalSecret,
+  GEMINI_API_KEY: optionalSecret,
+  GEMINI_MODEL: z.preprocess((value) => typeof value === "string" && value.trim() === "" ? undefined : value, z.string().trim().min(1).optional()),
   MEDIA_PROVIDER_MODE: z.enum(["live", "fixture"]).default("fixture"),
 });
 

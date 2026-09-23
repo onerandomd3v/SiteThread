@@ -4,7 +4,7 @@
 >
 > **Validation dates:** 2026-09-17 UTC (COD-14); 2026-09-17 UTC / 2026-09-18 local (COD-32)
 >
-> **Status:** COD-176 selects the official creative MCP for bounded transcription only. Visual-semantic and strict observation-reasoning providers remain explicit unresolved runtime dependencies.
+> **Status:** COD-176 selects the official creative MCP for bounded transcription. COD-177 adds a separate Google Gemini visual-semantic provider for bounded six-second evidence clips. COD-178 implements a Gemini-backed `ObservationReasoner` with strict local grounding; its one-shot live smoke remains pending provider availability.
 >
 > **Scope:** Integration decision and validation findings. No COD-17 pipeline implementation.
 
@@ -12,33 +12,41 @@
 
 The earlier COD-32 raw-MCP decision remains historical. The current hackathon path uses `https://agent.livepeer.org/api/mcp/creative` through the SiteThread-owned transcription boundary in the Trigger.dev worker. The creative SDK client sends no Authorization header, performs pricing/balance preflight, uses short-lived signed R2 URLs, and closes each MCP session.
 
-COD-176 freezes one proven live contract: exact six-second FFmpeg source windows sent to creative `transcribe` with `granularity: "segment"`. Returned text is normalized without manufacturing cues, SRT, or provider timestamps; SiteThread's original window remains authoritative. `find_moments` is not part of the live path, and no validated creative async semantic-video route exists. Visual semantics and ObservationReasoner execution are therefore not silently substituted or attributed to Livepeer.
+COD-176 freezes one proven live contract: exact six-second FFmpeg source windows sent to creative `transcribe` with `granularity: "segment"`. Returned text is normalized without manufacturing cues, SRT, or provider timestamps; SiteThread's original window remains authoritative. `find_moments` is not part of the live path, and no validated creative async semantic-video route exists. Visual semantics and observation reasoning use separate Google Gemini adapters and are never attributed to Livepeer.
 
 ### COD-176 responsibility split
 
 ```text
 Creative MCP transcribe → bounded transcript text
 FFmpeg + private R2   → deterministic derivatives and evidence assets
-Separate visual provider → unresolved runtime dependency
-Separate reasoner       → unresolved runtime dependency
+Google Gemini          → bounded visual-semantic prose from inline MP4 bytes
+Google Gemini          → strict JSON observation reasoning over labeled SiteThread evidence
 SiteThread              → source ranges, provenance, idempotency, review, reports
 ```
 
-**COD-17 is implementation-safe** under the explicit contract in this document. That statement authorizes provider implementation, fixtures, orchestration, and normalization; it is not a production-readiness claim. An issued Livepeer bearer, a live signed-R2 fetch, representative owned construction media, and the resulting latency/cost rehearsal must pass before the live demo or production mode is considered ready.
+**COD-17 is implementation-safe** under the explicit contract in this document. That statement authorizes provider implementation, fixtures, orchestration, and normalization; it is not a production-readiness claim. Verify private R2 access for the active Creative transcription and Gemini visual adapters, representative owned/consented construction media, and the resulting latency/cost rehearsal before treating the live demo as ready. The keyless Creative MCP path does not require a Livepeer bearer.
 
-Direct Livepeer HTTP is a real alternative: its public registry, OpenAPI, and the underlying result of our MCP-submitted job were reachable. It remains useful for diagnosis and reconsideration if MCP cannot preserve the required results. Direct inference submission, authenticated production behavior, and equivalent idempotency were not validated. Do not silently add an SDK fallback or call unrelated model vendors.
+Direct Livepeer HTTP was a real alternative in the COD-32 investigation: its public registry, OpenAPI, and the underlying result of our MCP-submitted job were reachable. Direct inference submission, authenticated production behavior, and equivalent idempotency were not validated. No direct HTTP fallback is selected for the current transcription path; COD-177 explicitly selects Google Gemini for visual semantics.
 
 The earlier blanket rejection of MCP as a production runtime was unsupported. MCP can be called deterministically from application code; it does not require a human chat session. The workshop demonstrates this application pattern. Trigger.dev still owns the durable workflow. [Get Started][get-started] · [Workshop adapter][workshop-adapter]
 
-## COD-32 runtime validation
+### Current runtime contract (COD-176 / COD-177 / COD-178)
+
+- **Transcription:** Livepeer Creative MCP, using bounded six-second windows and SiteThread-owned source timing.
+- **Visual semantics:** the Google Gemini adapter, using bounded evidence clips. There is no Marlin or raw-Livepeer visual fallback.
+- **Observation reasoning:** a Google Gemini adapter behind SiteThread's `ObservationReasoner` interface. It receives normalized labeled transcript/visual evidence only, requests schema-constrained JSON, re-parses and validates with `ObservationReasoningOutputSchema`, and rejects references not present in that invocation. The model and raw Livepeer `gemini-text` are not exposed to core orchestration. Ambiguous delivery is non-retryable; rate limiting is explicitly retryable, and there is no provider/model fallback.
+
+The raw-MCP and Marlin material below records earlier investigations only. It is not the selected or required production path.
+
+## Historical COD-32 runtime validation (raw-MCP investigation)
 
 The COD-32 probes used the live service with generated speech, a generated image, and generated short clips. They used no fixture responses, project secrets, or construction media. Full responses, media, and probe scripts remained outside the repository. Single-call timings are observations, not benchmarks.
 
-### Current raw surface and authentication behavior
+### Historical raw-MCP surface and authentication observations
 
-- `https://agent.livepeer.org/api/mcp/raw` accepted JSON-RPC `initialize` at protocol `2024-11-05`, `notifications/initialized`, and `tools/list`. It identified `livepeer-agent-raw`, version `1.0.0`, returned 23 tools, and did not issue an `Mcp-Session-Id`; subsequent tool calls in each initialized exchange succeeded without one. The bare `/api/mcp` path resolved to the same raw server in this test, but COD-17 must use the named `/raw` path.
+- The COD-32 probe of `https://agent.livepeer.org/api/mcp/raw` accepted JSON-RPC `initialize` at protocol `2024-11-05`, `notifications/initialized`, and `tools/list`. It identified `livepeer-agent-raw`, version `1.0.0`, returned 23 tools, and did not issue an `Mcp-Session-Id`; subsequent tool calls in each initialized exchange succeeded without one. The bare `/api/mcp` path resolved to the same raw server in that test. This is historical raw-adapter evidence, not the current COD-17 endpoint; the current transcription path is `/api/mcp/creative`.
 - `list_capabilities` still returned 207 capabilities. `nemotron-asr`, `whisper-word`, `wizper`, `nemotron-omni`, and `marlin-video` were present; `wizper` was experimental and `nemotron-vision` was not registered.
-- Without an Authorization header, `me` returned `key_class: "demo"`. A deliberately invalid bearer was accepted as a different `key_class: "opaque"` principal instead of proving or rejecting account ownership. Therefore a successful initialize or `me` response is not a production credential check. The legacy raw adapter must require an issued server-side bearer and complete an account/credit smoke test when that adapter is selected. The creative path is keyless and must not require `LIVEPEER_MCP_BEARER`; fixture mode must remain separate. No additional authentication field is justified by current evidence.
+- Without an Authorization header, `me` returned `key_class: "demo"`. A deliberately invalid bearer was accepted as a different `key_class: "opaque"` principal instead of proving or rejecting account ownership. Therefore a successful initialize or `me` response is not a production credential check. These observations apply to the legacy raw adapter only. The current Creative MCP path is keyless and must not require `LIVEPEER_MCP_BEARER`; fixture mode remains separate.
 
 ### Timestamp-grounded transcription
 
@@ -64,32 +72,36 @@ For a 60–120 second walkthrough, six-second windows imply 10–20 ASR calls. A
 
 Windows are six seconds except for the final window. If the media duration is not divisible by six, shorten the final window to the exact remaining duration and persist its true half-open range without exceeding the media duration. Send a nonempty final partial window to ASR; an empty or silent result may be omitted from later reasoning under the existing empty-window rule. Do not pad the final window or invent timing. For example, a 62-second walkthrough ends with `[60, 62)`, never `[60, 66)`.
 
-### Visual route decision
+### Historical COD-32 visual-route investigation (superseded by COD-177)
 
-The controlled PNG sent to `nemotron-omni` again produced `image_accessible: false`; current discovery did not expose `nemotron-vision`. Frame/image analysis is rejected for COD-17's initial live provider.
+> Historical evidence only: the Marlin tests below informed the earlier raw-MCP proposal. Synchronous `marlin-video` is **not** the current selected or required visual provider. COD-177's Gemini adapter is the current visual-semantic route; no raw-Livepeer visual fallback is used.
 
-The video probe was a six-second, 640 × 360 H.264/AAC clip of 35,676 bytes. A blue rectangle and red circle exchanged left/right positions at three seconds. Three `marlin-video` async jobs, including a fresh-key retry and a clip with an ordinary audio track, reached `failed` through `get_create_media` with “returned no media” even though the jobs declared `output_kind: "text"`. Their session cost report attributed $0.0474 to three failed jobs. This reproduces a text-result/media-wrapper mismatch for Marlin; the async result is not an acceptable COD-17 contract.
+In that historical probe, the controlled PNG sent to `nemotron-omni` again produced `image_accessible: false`, and discovery did not expose `nemotron-vision`. Raw-Livepeer frame/image analysis was therefore not selected in COD-32; this does not describe the current Gemini route.
+
+The historical video probe was a six-second, 640 × 360 H.264/AAC clip of 35,676 bytes. A blue rectangle and red circle exchanged left/right positions at three seconds. Three `marlin-video` async jobs, including a fresh-key retry and a clip with an ordinary audio track, reached `failed` through `get_create_media` with “returned no media” even though the jobs declared `output_kind: "text"`. Their session cost report attributed $0.0474 to three failed jobs. This reproduced a text-result/media-wrapper mismatch in COD-32; it is not a current COD-17 provider requirement.
 
 The same audio-video input sent with `async: false` succeeded in 177.982 seconds. Its text correctly described both layouts and returned `<0.0 - 3.0>` and `<3.0 - 6.0>` event ranges. The estimated cost was $0.0158. A same-key replay returned the identical result in 0.723 seconds with `idempotency_replay: true`.
 
-COD-17 must therefore use **synchronous `marlin-video` inside Trigger.dev**, with a 260-second provider timeout and a 300-second HTTP deadline. The authoritative success value is the synchronous `structuredContent` where `ok === true`, `output_kind === "text"`, and `result.text` is nonempty. A provider event range is a candidate only when its start and end are finite, `start <= end`, and the entire range is contained within the actual input clip duration. Reject or ignore an out-of-bounds range; never clamp an unsupported provider event into trusted evidence. The full SiteThread-owned source clip range remains the durable evidence fallback whenever event parsing fails or a candidate is rejected.
+The **historical COD-32 proposal** was to use synchronous `marlin-video` inside Trigger.dev, with a 260-second provider timeout and a 300-second HTTP deadline. Those response-parsing and event-range notes are retained as investigation context only; they do not define the current COD-17 runtime contract.
 
 Do not analyze every source window. For the MVP, partition the walkthrough into 20-second buckets and select at most one six-second clip per bucket, preferring a nonempty transcript window nearest the bucket center and otherwise taking a periodic sample. Clamp each clip to the media duration, deduplicate overlapping selections, and cap one walkthrough at six visual calls. This yields at most three calls for a 60-second walkthrough and six for a 120-second walkthrough. At the observed estimate, visual inference is at most $0.0474–$0.0948; the combined ASR plus visual estimate is approximately $0.0544–$0.1088 before retries, storage, or price changes.
 
 ### Jobs, errors, replay, and source access
 
 - HTTP 200 is only transport success. Parse JSON-RPC errors, MCP `isError`, `structuredContent.ok`, and job `status` before reading output.
-- The selected ASR and visual calls are synchronous. The successful synchronous payload is authoritative. `get_create_media` remains usable for explicitly async, nonselected capabilities; `status: "failed"` is terminal even on HTTP 200.
+- In the historical COD-32 raw-MCP tests, the selected ASR and visual calls were synchronous. The successful synchronous payload was authoritative. `get_create_media` remains relevant to explicitly async raw capabilities; `status: "failed"` is terminal even on HTTP 200.
 - Identical ASR and Marlin requests with the same key replayed the cached result with `idempotency_replay: true`; async replay returned the same job ID. The live tool schema states a 24-hour, per-bearer cache. SiteThread still owns durable `walkthroughId + pipelineVersion` deduplication.
 - Retry an uncertain transport outcome with the same idempotency key. Do not retry invalid input, missing media, auth, schema, or unavailable-capability errors unchanged. A terminal cached failure needs a recorded, policy-approved new attempt key; allow at most one fresh attempt for a classified transient provider failure because failed Marlin submissions can still be billed.
 - An inaccessible ASR URL returned nested upstream HTTP 502 details, `code: "upstream_error"`, `retryable: false`, and `billing_note: "likely_billed_upstream"`. Treat the explicit retry flag and error class as authoritative over the nested status code.
 - MCP `upload` returned `ephemeral: false`, and an unauthenticated HEAD request retrieved the uploaded clip with HTTP 200. Those hosted URLs are public handoff artifacts and are prohibited for private construction media in production.
 
-No R2 credentials were available, so a realistic signed-R2 GET was not runtime-verified. COD-17 may implement the private-media contract by creating a signed GET URL immediately before each dispatch, with at least 15 minutes of validity, never persisting or logging it, and regenerating it for a fresh retry. The URL must refer to the bounded audio window or short clip, not the full walkthrough. A deployment smoke test must prove Livepeer can fetch that URL before live demo readiness; MCP public upload is not an acceptable fallback for construction media.
+No R2 credentials were available for the COD-32 raw-MCP investigation, so those probes did not validate a signed-R2 GET. In the current runtime, Creative MCP receives a short-lived signed URL for a bounded audio window; the Gemini adapter fetches a signed evidence-clip URL server-side and sends the media bytes, not the URL, to Gemini. Never persist or log signed URLs, and do not use public MCP uploads for construction media. The raw-MCP requirement that Livepeer fetch a signed video clip is historical and superseded.
 
 No owned construction walkthrough was present locally or in the repository. **Construction-domain performance remains unvalidated.** The successful visual result proves a generic synthetic event transition only.
 
-### COD-17 request and normalization contract
+### Historical COD-32 raw-MCP request and normalization notes (superseded)
+
+The request examples and normalization guidance in this subsection document the earlier raw-MCP experiment. In particular, the Marlin request is not a current COD-17 requirement; use the COD-176 / COD-177 runtime contract above.
 
 After `initialize` and `notifications/initialized`, discover the exact names and fail if either selected capability is unavailable. Do not select by alias or model family. The tested requests, with sensitive values represented as placeholders, are:
 
@@ -136,7 +148,7 @@ For both calls, require HTTP success, no JSON-RPC error, no MCP `isError`, `stru
 
 The transcription orchestrator attaches the deterministic source range to the returned text; the provider response is not the source of timing truth. The visual orchestrator attaches `VisualAnalysisInput.sourceStartSeconds` and `sourceEndSeconds` to the whole result. Provider event subranges may be normalized only when their finite start and end satisfy `start <= end` and the full range is contained within the actual input clip duration, then offset by the clip's source start. Reject or ignore out-of-bounds event ranges instead of clamping unsupported claims into trusted evidence.
 
-If a nonselected async capability is ever used, `run_capability` returns `status: "submitted"`, a `job_id`, and `poll_with: "get_create_media"`. Poll with that `job_id`; `submitted` or `running` is nonterminal, `done` requires a valid `run_output`, and `failed` is terminal even on HTTP 200. Persist the provider job ID before polling. COD-17's selected ASR and Marlin calls do not use this path.
+If a nonselected async raw-MCP capability is ever used, `run_capability` returns `status: "submitted"`, a `job_id`, and `poll_with: "get_create_media"`. Poll with that `job_id`; `submitted` or `running` is nonterminal, `done` requires a valid `run_output`, and `failed` is terminal even on HTTP 200. Persist the provider job ID before polling. This is historical transport guidance; the current COD-17 path does not call `run_capability` or Marlin.
 
 Map the selected synchronous lifecycle into existing processing states as follows:
 
@@ -144,7 +156,7 @@ Map the selected synchronous lifecycle into existing processing states as follow
 |---|---|
 | Durable processing run created; work not started | `QUEUED` |
 | FFmpeg audio windowing or any selected ASR call in progress | `TRANSCRIBING` |
-| Clip selection, FFmpeg clip extraction, or any selected Marlin call in progress | `ANALYZING_MEDIA` |
+| Clip selection, FFmpeg clip extraction, or Gemini visual analysis in progress | `ANALYZING_MEDIA` |
 | All required normalized transcripts and visual candidates persisted; observation reasoning is ready | `EXTRACTING_OBSERVATIONS` |
 | Run-scoped draft observations and evidence links atomically persisted | `NEEDS_REVIEW` |
 | Retryable transport/provider failure while attempts remain | Keep the current stage and increment `retryCount` |
@@ -152,9 +164,13 @@ Map the selected synchronous lifecycle into existing processing states as follow
 
 The COD-176 transcription adapter contract is therefore: creative MCP `/api/mcp/creative`; protocol `2024-11-05`; no Authorization header; bounded SDK connection/request lifetime; pricing/balance preflight; six-second SiteThread-owned windows; result-text validation; same-key application idempotency; no signed-URL persistence/logging; and no provider/model substitution. The legacy raw adapter remains isolated and is not selected by the hackathon live factory.
 
+### COD-177 visual-semantic provider contract
+
+The live visual route is SiteThread's `VisualSemanticProvider` backed by the official Google Gemini `generateContent` API. It fetches each short-lived private R2 URL server-side, rejects media above a conservative inline-request byte ceiling, sends the bytes as `video/mp4`, and never sends the signed URL to Gemini. Gemini returns interpretation prose only; SiteThread retains the evidence clip and authoritative source range and does not accept invented timestamps. Provider diagnostics record the configured Google model, capability, idempotency key, latency, and sanitized response metadata without media bytes, signed URLs, or credentials. Fixture mode remains deterministic and does not construct the Gemini provider. Missing live Gemini configuration fails closed; there is no Marlin or other visual fallback.
+
 ## COD-14 runtime baseline
 
-This section preserves the earlier COD-14 observations for auditability. Where behavior or decisions differ, the COD-32 runtime section and contract above are current. In particular, COD-32 did not reproduce the Whisper retrieval failure, did reproduce the text-job mismatch on Marlin async, and selected synchronous Marlin instead.
+This section preserves the earlier COD-14 observations for auditability. Its raw-MCP and Marlin choices are historical and superseded by the current COD-176 / COD-177 runtime contract above. COD-32 did not reproduce the Whisper retrieval failure, did reproduce the text-job mismatch on Marlin async, and selected synchronous Marlin at that time.
 
 All inference tests used the real Livepeer service with **no Authorization header**, using the keyless demo. No fixtures or mocks were substituted. No project credential was needed or tested.
 
@@ -219,7 +235,7 @@ Displayed rates before execution were $0.00014/second for Nemotron ASR, $0.00007
 | Image candidate: `nemotron-omni` | `nvidia/nemotron-3-nano-omni` | Prompt, `source_url`, `inputs.image_url`, `reasoning_mode: "no_think"`, `max_tokens: 200`, `temperature: 0` | Returned a JSON string reporting unavailable image access. The registered base model must not be assumed to use the separate upstream vision route. |
 | Video candidate: `marlin-video` | `fal-ai/marlin` | `inputs.video_url`, documented spatial/event prompt, `max_tokens: 200`, `do_sample: false` | `get_create_media` returned `status: "done"` and `run_output.result: { text, model_id }`. Text contained scene prose and time-ranged events. Verified video-understanding candidate; direct image/frame contract remains unselected. |
 
-COD-18 uses the discovered `gemini-text` capability only as a text reasoning step after media candidates are persisted. The current registry describes it as available text output through `run_capability` with model ID `fal-ai/any-llm`; the reasoner sends normalized transcript and visual-candidate descriptions labeled with SiteThread-owned references and no media URLs. The earlier image request that reported unavailable image access remains evidence that `gemini-text` is not a selected visual route.
+**Historical COD-18 proposal (superseded by COD-178):** use the discovered raw Livepeer `gemini-text` capability as a text reasoning step. That route is not selected or used by the current implementation. Live observation reasoning uses the Google Gemini adapter behind `ObservationReasoner`; raw `gemini-text` remains only as archived investigation context.
 
 The synchronous ASR/Gemini/Omni probes used `async: false` and `timeout: 60`. Whisper used `async: true` and `timeout: 120`; Marlin used `async: true` and `timeout: 260`. All used `persist: false`, an application `session_id`, and a unique `idempotency_key` per logical request. The temporary client had a separate 90-second HTTP deadline, which was not reached; asynchronous inference continued independently of its submission request.
 
@@ -255,18 +271,18 @@ For the initial ASR, Gemini, and Whisper session, `get_cost_report` returned zer
 
 No rate limit, exhausted-credit condition, cancelled inference, network timeout recovery, or production bearer rejection was deliberately induced.
 
-## Verified from current documentation and schemas
+## Historical COD-32 documentation and schema review
 
 These are documented contracts or upstream schemas, not additional successful SiteThread tests.
 
 ### COD-32 primary-source refresh (documentation only, 2026-09-18)
 
-This subsection records what current first-party pages, public endpoint schemas, and upstream model-owner schemas say. It involved no inference calls and does **not** replace the live COD-32 probes. A documented field is a candidate contract until the selected raw-MCP route returns it in a controlled test.
+This subsection records a 2026-09-18 snapshot of first-party pages, public endpoint schemas, and upstream model-owner schemas. It involved no inference calls and does **not** replace the live COD-32 probes or the current COD-176 / COD-177 runtime contract. Raw-MCP and Marlin details below are historical; documented fields are not current SiteThread provider selections.
 
 #### Raw MCP surface, protocol, and authentication
 
-- Livepeer now publishes a path-pinned raw endpoint at `https://agent.livepeer.org/api/mcp/raw`. Its read-only identity describes a deterministic `raw` Streamable HTTP surface with no planner or model substitution. The official [MCP onboarding skill][agent-mcp-skill] likewise describes `run_capability` for exact dispatch and `get_create_media` / `cancel_job` for job control. Prefer the named path when freezing the COD-17 configuration; Livepeer's own onboarding material warns that the bare `/api/mcp` profile can change. At this review, the [named raw identity][raw-mcp-identity] and [bare endpoint identity][mcp-root-identity] both reported `raw`, while the [Get Started page][get-started] still configured the bare path. This documentation drift makes runtime initialization and `tools/list` authoritative. Do not pin a documented tool count.
-- The public endpoint identity says `streamable-http`, but it does not declare a negotiated MCP protocol revision or session policy. MCP session behavior is revision-dependent: the 2025-era lifecycle begins with `initialize`, and a client must return a server-issued `Mcp-Session-Id`; the final 2026-07-28 revision removed both the handshake and protocol-level session header. COD-17 must implement the lifecycle actually accepted by Livepeer during COD-32 rather than assuming either behavior from the transport name. [MCP 2025 lifecycle][mcp-2025-lifecycle] · [MCP 2025 transport][mcp-2025-transport] · [MCP 2026 session change][mcp-2026-session-change]
+- Livepeer publishes a path-pinned raw endpoint at `https://agent.livepeer.org/api/mcp/raw`. Its read-only identity describes a deterministic `raw` Streamable HTTP surface with no planner or model substitution. The official [MCP onboarding skill][agent-mcp-skill] likewise describes `run_capability` for exact dispatch and `get_create_media` / `cancel_job` for job control. COD-32 used the named raw path because Livepeer's onboarding material warned that the bare `/api/mcp` profile could change. At that review, the [named raw identity][raw-mcp-identity] and [bare endpoint identity][mcp-root-identity] both reported `raw`, while the [Get Started page][get-started] still configured the bare path. This historical documentation drift is not current COD-17 configuration guidance. Do not pin a documented tool count.
+- The public endpoint identity says `streamable-http`, but it does not declare a negotiated MCP protocol revision or session policy. MCP session behavior is revision-dependent: the 2025-era lifecycle begins with `initialize`, and a client must return a server-issued `Mcp-Session-Id`; the final 2026-07-28 revision removed both the handshake and protocol-level session header. COD-32 implemented the lifecycle accepted by Livepeer at that time; this raw-MCP note does not prescribe the current Creative MCP client lifecycle. [MCP 2025 lifecycle][mcp-2025-lifecycle] · [MCP 2025 transport][mcp-2025-transport] · [MCP 2026 session change][mcp-2026-session-change]
 - Livepeer's current setup page documents `Authorization: Bearer <key>` for account access and conditional keyless demo access when the server enables it. This supports retaining the server-only `LIVEPEER_MCP_BEARER` setting, but it is not evidence that a SiteThread production credential, account limits, or OAuth flow have been validated. The page's keyless credit wording is operational guidance, not a production authorization guarantee.
 
 #### Media handoff and private-source implications
@@ -324,7 +340,7 @@ LIVEPEER_CREATIVE_MCP_URL=https://agent.livepeer.org/api/mcp/creative
 MEDIA_PROVIDER_MODE=live
 ```
 
-`LIVEPEER_MCP_URL` and `LIVEPEER_MCP_BEARER` remain optional legacy-adapter settings and are not required by the creative path. The creative SDK client intentionally sends no Authorization header. Keep fixture mode explicitly separate, with no automatic switch after a live failure. Production credentials and their account-specific limits must be validated before the demo deployment.
+`LIVEPEER_MCP_URL` and `LIVEPEER_MCP_BEARER` remain optional legacy-adapter settings and are not required by the creative path. The creative SDK client intentionally sends no Authorization header. Keep fixture mode explicitly separate, with no automatic switch after a live failure. Validate credentials, limits, and costs for the selected providers before demo deployment.
 
 ### Direct HTTP contract
 
@@ -377,7 +393,7 @@ Reference inspected at commit `406c845aedac53ab1df4e9bdb3fe644006e31bdb`:
 - The [judge][workshop-judge] passes a media URL as `source_url` to `gemini-text`. This demonstrates intended use, not verified image perception; our controlled test did not pass.
 - Real/mock selection is explicit in its adapter factory and [environment example][workshop-env]. SiteThread must retain that distinction. OriginTrail DKG is unrelated to this Track 1 spike.
 
-## Runtime comparison for SiteThread
+## Historical COD-32 runtime comparison (not the current SiteThread provider selection)
 
 | Concern | Raw MCP | Direct Livepeer HTTP |
 |---|---|---|
@@ -393,7 +409,7 @@ Reference inspected at commit `406c845aedac53ab1df4e9bdb3fe644006e31bdb`:
 | Stability | Current dedicated raw endpoint; setup-page drift and wrapper defect found | Current OpenAPI; historical request envelope differs |
 | Complexity | MCP framing and normalization, with useful discovery/idempotency built in | Simpler HTTP framing, but more policy and retry behavior to establish |
 
-Select raw MCP behind the existing provider boundary with the COD-32 windowed-ASR and synchronous-short-clip constraints. There is no evidence that a wholesale move to direct HTTP alone restores timestamps or image perception. Revisit the transport choice if Livepeer exposes a stable native timestamp result or a reliable direct frame route.
+The COD-32 comparison historically favored raw MCP for its tested contracts. That recommendation is superseded: the current hackathon runtime uses Livepeer Creative MCP for bounded transcription and Google Gemini for visual semantics, with no raw-Livepeer visual fallback. The earlier direct-HTTP comparison remains useful context, not a current selection instruction.
 
 ## SiteThread contract and responsibility boundary
 
@@ -417,11 +433,13 @@ Vision text may contain Markdown fences or malformed JSON. Validate any extracte
 |---|---|
 | SiteThread / R2 | Private source media, short-lived processor access, evidence identity and review states |
 | FFmpeg | Metadata probing, audio extraction, deterministic frame extraction, thumbnails and evidence clips |
-| Livepeer | Text inference for bounded audio windows and short video clips under the selected COD-32 contracts |
+| Livepeer Creative MCP | Bounded transcription windows |
+| Google Gemini adapter | Visual semantics from bounded evidence clips |
 | Trigger.dev | Durable orchestration, bounded polling, retry policy and job history |
-| SiteThread normalization/reasoning | Validate results, join narration with visual evidence, prepare draft observations |
+| Google Gemini via `ObservationReasoner` | Strict grounded JSON observation reasoning; one-shot live smoke remains pending provider availability |
+| SiteThread normalization | Validate provider results, preserve source ranges and provenance, and prepare reviewable drafts |
 
-The generated probe uploads were publicly readable hosted media, **not a validation of private R2 signed URLs**. Keep construction media private by default. COD-17 must use dispatch-time signed GET URLs for bounded derivatives and must never persist or log them. The live deployment still needs the signed-R2 smoke test described above.
+The generated probe uploads were publicly readable hosted media, **not a validation of private R2 signed URLs**. Keep construction media private by default. In the current COD-17 flow, issue short-lived signed GET URLs only for bounded derivatives and never persist or log them: Creative MCP receives the bounded audio URL, while SiteThread fetches the visual clip from R2 and sends Gemini the bytes rather than the URL. The former requirement for Livepeer to fetch signed video clips is historical.
 
 The minimum intended golden path remains:
 
@@ -432,7 +450,7 @@ Private walkthrough upload
 → Livepeer transcript text mapped to each exact source window
 → narration-prioritized periodic clip selection, deduplicated
 → FFmpeg six-second evidence clips
-→ synchronous Livepeer descriptive visual evidence
+→ Google Gemini visual semantics over bounded evidence clips
 → validated evidence candidates and draft observations
 → Confirm / Edit / Dismiss
 → report containing only confirmed or edited findings
@@ -457,17 +475,17 @@ Keep request deadlines and whole-job deadlines separate. Size inference timeouts
 - A zero/incomplete cost report proves the calls were free.
 - The old direct SDK request envelope and package availability are settled facts.
 
-## Residual gates before live demo or production readiness
+## Historical COD-32 raw/Marlin readiness notes (superseded)
 
-These items do not require COD-17 to guess an implementation shape, but they must pass before enabling the live provider for the demo or production:
+The following gates were written for the former raw-MCP/Marlin proposal and are retained as historical context; they are not requirements for the current Creative/Gemini path:
 
 1. **Issued production bearer:** provision the intended Livepeer credential and verify its `me`/usage identity, available credit, and account limits. Keyless demo and an arbitrary opaque bearer do not establish account ownership or production authorization.
 2. **Signed private input:** prove Livepeer can fetch a newly issued R2 signed GET URL for a bounded audio window and H.264/AAC clip with the selected synchronous calls. Verify expiry and retry regeneration. Never fall back to the public MCP upload for construction media.
 3. **Representative construction media:** run an owned/consented 60–120 second walkthrough with aligned narration and visible conditions. Measure transcript usefulness, visual grounding, processing latency, and false or unsupported findings. Construction-domain performance remains unvalidated.
 4. **Operational envelope:** reconcile actual account charges, rate/concurrency limits, retention, and the six-clip maximum. The current per-call prices are estimates, and three failed async Marlin jobs were still attributed $0.0474.
-5. **Marlin async repair, optional:** do not use Marlin async polling in COD-17. A future switch requires a controlled text-result probe to pass; the synchronous route remains the frozen MVP contract until then.
+5. **Marlin async probe:** the COD-32 async Marlin result did not validate. The proposed synchronous workaround was superseded by COD-177; Marlin is not used by the current visual route.
 
-**COD-17 is implementation-safe.** The provider implementation must fail clearly if the exact capabilities are unavailable, keep fixture mode explicit, and expose production readiness as failed until gates 1–4 pass. It must not introduce direct HTTP fallback, frame inference, public media upload, or another provider silently.
+**Current runtime contract:** Livepeer Creative MCP handles bounded transcription; separate Google Gemini adapters handle visual semantics and strict observation reasoning. Fail clearly when a selected provider is unavailable, keep fixture mode explicit, and do not introduce a Marlin/raw-Livepeer visual fallback or raw `gemini-text` reasoning path.
 
 Only durable findings and the minimal implementation contract belong in this change. Validation for this spike consists of real provider probes, primary-source checks, repository checks, and complete diff/secret-scope inspection.
 

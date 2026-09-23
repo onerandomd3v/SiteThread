@@ -16,6 +16,7 @@ export interface ProviderResult<T> {
 }
 
 export type CapabilityRequirement = "TRANSCRIPTION" | "VISION";
+export const VISUAL_SEMANTIC_CAPABILITY = "visual-semantic";
 
 export interface MediaCapabilities {
   discoveredAt: Date;
@@ -41,6 +42,11 @@ export interface MediaIntelligenceProvider {
   discoverCapabilities(): Promise<MediaCapabilities>;
   transcribe(input: TranscriptionInput): Promise<ProviderResult<ProviderTranscriptResult>>;
   analyzeVisual(input: VisualAnalysisInput): Promise<ProviderResult<ProviderVisionResult>>;
+}
+
+export interface ProviderAttribution {
+  provider: string;
+  capability: string;
 }
 
 export interface TranscriptionProvider {
