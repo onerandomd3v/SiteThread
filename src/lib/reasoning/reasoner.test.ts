@@ -124,16 +124,23 @@ describe("observation reasoner", () => {
     expect(body.generationConfig).toHaveProperty("responseSchema");
     expect(body.generationConfig).not.toHaveProperty("responseJsonSchema");
     expect(body.generationConfig).not.toHaveProperty("responseFormat");
-    expect(collectSchemaKeys(schema).every((key) => ["type", "properties", "required", "enum", "items"].includes(key))).toBe(true);
+    expect(collectSchemaKeys(schema).every((key) => [
+      "type", "properties", "required", "enum", "items", "minItems", "maxItems",
+      "minLength", "maxLength", "minimum", "maximum",
+    ].includes(key))).toBe(true);
     expect(collectSchemaKeys(schema)).not.toContain("additionalProperties");
     expect(body.generationConfig.maxOutputTokens).toBe(4_096);
     expect(schema).toMatchObject({ type: "OBJECT", required: ["observations"] });
-    expect(observationSchema.type).toBe("ARRAY");
+    expect(observationSchema).toMatchObject({ type: "ARRAY", maxItems: "20" });
     expect(itemSchema).toMatchObject({ type: "OBJECT", required: ["type", "description", "evidenceRefs"] });
     expect(observationProperties.type.type).toBe("STRING");
     expect(observationProperties.type.enum).toEqual(["progress", "potential_issue", "action", "note"]);
-    expect(observationProperties.confidence.type).toBe("NUMBER");
-    expect(observationProperties.evidenceRefs.type).toBe("ARRAY");
+    expect(observationProperties.description).toMatchObject({ type: "STRING", minLength: "1", maxLength: "600" });
+    expect(observationProperties.location).toMatchObject({ type: "STRING", minLength: "1", maxLength: "120" });
+    expect(observationProperties.trade).toMatchObject({ type: "STRING", minLength: "1", maxLength: "120" });
+    expect(observationProperties.confidence).toMatchObject({ type: "NUMBER", minimum: 0, maximum: 1 });
+    expect(observationProperties.suggestedAction).toMatchObject({ type: "STRING", minLength: "1", maxLength: "400" });
+    expect(observationProperties.evidenceRefs).toMatchObject({ type: "ARRAY", minItems: "1", maxItems: "12" });
     expect((observationProperties.evidenceRefs.items as Record<string, unknown>).type).toBe("STRING");
     expect((observationProperties.evidenceRefs.items as Record<string, unknown>).enum).toEqual(["T0", "V0"]);
     expect(result.value.observations[0]).toMatchObject({ type: "note", evidenceRefs: ["T0", "V0"] });

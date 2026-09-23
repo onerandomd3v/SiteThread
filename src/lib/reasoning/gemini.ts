@@ -47,6 +47,12 @@ type GenerateContentSchema = {
   required?: string[];
   items?: GenerateContentSchema;
   enum?: string[];
+  minItems?: string;
+  maxItems?: string;
+  minLength?: string;
+  maxLength?: string;
+  minimum?: number;
+  maximum?: number;
 };
 
 function generateContentResponseSchema(evidenceRefs: string[]): GenerateContentSchema {
@@ -61,16 +67,17 @@ function generateContentResponseSchema(evidenceRefs: string[]): GenerateContentS
     properties: {
       observations: {
         type: "ARRAY",
+        maxItems: "20",
         items: {
           type: "OBJECT",
           properties: {
             type: { type: "STRING", enum: ["progress", "potential_issue", "action", "note"] },
-            description: { type: "STRING" },
-            location: { type: "STRING" },
-            trade: { type: "STRING" },
-            confidence: { type: "NUMBER" },
-            suggestedAction: { type: "STRING" },
-            evidenceRefs: { type: "ARRAY", items: evidenceRefSchema },
+            description: { type: "STRING", minLength: "1", maxLength: "600" },
+            location: { type: "STRING", minLength: "1", maxLength: "120" },
+            trade: { type: "STRING", minLength: "1", maxLength: "120" },
+            confidence: { type: "NUMBER", minimum: 0, maximum: 1 },
+            suggestedAction: { type: "STRING", minLength: "1", maxLength: "400" },
+            evidenceRefs: { type: "ARRAY", minItems: "1", maxItems: "12", items: evidenceRefSchema },
           },
           required: ["type", "description", "evidenceRefs"],
         },
