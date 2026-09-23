@@ -113,16 +113,20 @@ async function readBoundedErrorBody(response: Response): Promise<string> {
 
 function safeErrorMessage(message: string, privateValues: string[]): string {
   const normalizedMessage = message.toLocaleLowerCase();
+  const fragmentLength = 32;
+  const messageFragments = new Set<string>();
+  for (let index = 0; index <= normalizedMessage.length - fragmentLength; index += 1) {
+    messageFragments.add(normalizedMessage.slice(index, index + fragmentLength));
+  }
   const echoesPrivateValue = privateValues.some((value) => {
     const normalizedValue = value.toLocaleLowerCase();
     if (normalizedValue.length === 0) return false;
     if (normalizedMessage.includes(normalizedValue)) return true;
 
     // Providers may echo only part of a prompt or evidence item in diagnostics.
-    const fragmentLength = Math.min(32, normalizedValue.length);
-    if (fragmentLength < 16) return false;
+    if (normalizedValue.length < fragmentLength) return false;
     for (let index = 0; index <= normalizedValue.length - fragmentLength; index += 1) {
-      if (normalizedMessage.includes(normalizedValue.slice(index, index + fragmentLength))) return true;
+      if (messageFragments.has(normalizedValue.slice(index, index + fragmentLength))) return true;
     }
     return false;
   });
