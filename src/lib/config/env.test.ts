@@ -8,17 +8,23 @@ const requiredValues = {
 
 describe("server environment contract", () => {
   it("normalizes blank optional values to undefined", () => {
-    const env = parseServerEnv({ ...requiredValues, R2_ACCOUNT_ID: "", LIVEPEER_MCP_BEARER: "   ", LIVEPEER_MCP_URL: " ", LIVEPEER_CREATIVE_MCP_URL: "   " });
+    const env = parseServerEnv({ ...requiredValues, R2_ACCOUNT_ID: "", LIVEPEER_MCP_BEARER: "   ", LIVEPEER_MCP_URL: " ", LIVEPEER_CREATIVE_MCP_URL: "   ", REASONER_PROVIDER: " ", REASONER_MODEL: "", GROQ_API_KEY: "  " });
     expect(env.R2_ACCOUNT_ID).toBeUndefined();
     expect(env.LIVEPEER_MCP_BEARER).toBeUndefined();
     expect(env.LIVEPEER_MCP_URL).toBeUndefined();
     expect(env.LIVEPEER_CREATIVE_MCP_URL).toBeUndefined();
+    expect(env.REASONER_PROVIDER).toBeUndefined();
+    expect(env.REASONER_MODEL).toBeUndefined();
+    expect(env.GROQ_API_KEY).toBeUndefined();
   });
 
   it("preserves populated optional values", () => {
-    const env = parseServerEnv({ ...requiredValues, R2_ACCOUNT_ID: "account-1", TRIGGER_SECRET_KEY: "secret-1" });
+    const env = parseServerEnv({ ...requiredValues, R2_ACCOUNT_ID: "account-1", TRIGGER_SECRET_KEY: "secret-1", REASONER_PROVIDER: "groq", REASONER_MODEL: "openai/gpt-oss-20b", GROQ_API_KEY: "groq-secret" });
     expect(env.R2_ACCOUNT_ID).toBe("account-1");
     expect(env.TRIGGER_SECRET_KEY).toBe("secret-1");
+    expect(env.REASONER_PROVIDER).toBe("groq");
+    expect(env.REASONER_MODEL).toBe("openai/gpt-oss-20b");
+    expect(env.GROQ_API_KEY).toBe("groq-secret");
   });
 
   it("rejects missing or invalid required values", () => {

@@ -374,7 +374,9 @@ Never store large video blobs inside PostgreSQL.
 
 # 9. Livepeer Integration
 
-Livepeer is SiteThread's core media-intelligence provider.
+> **Historical COD-14 proposal, not the current runtime:** the Livepeer responsibilities and raw-MCP adapter direction below record an earlier investigation. Current runtime uses Livepeer Creative MCP for bounded transcription, Google Gemini for visual semantics, and a separately configured `ObservationReasoner` (Groq for the hackathon). There is no raw-Livepeer or Marlin visual fallback.
+
+The following Livepeer responsibilities and adapter sketch are historical context only.
 
 ## 9.1 Livepeer responsibilities
 
@@ -426,6 +428,8 @@ The rest of SiteThread should not know provider-specific request details.
 This protects the architecture from changes to Livepeer's API surface during the hackathon.
 
 COD-14 selected raw MCP as the runtime direction after real capability tests. Timestamped transcription and useful image understanding remain unresolved; this diagram does not imply the required media contracts are validated. See [the integration findings and gates before COD-17](livepeer-integration.md) before implementing the provider.
+
+**Current runtime note:** the implementation uses Livepeer Creative MCP for bounded transcription and Google Gemini for visual semantics. Observation reasoning is a separate provider-neutral `ObservationReasoner`; the hackathon configuration selects Groq `openai/gpt-oss-20b`. Provider selection and transport details stay behind the adapter factory. Strict provider JSON is parsed and checked again by the SiteThread Zod schema, and fixture mode remains deterministic.
 
 ---
 
