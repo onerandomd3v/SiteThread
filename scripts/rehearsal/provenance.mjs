@@ -62,6 +62,13 @@ export function validateReportObservationEvidence({ observation, sourceObservati
     if (evidence.transcriptSegmentId) {
       const segment = segments.find((candidate) => candidate.id === evidence.transcriptSegmentId);
       if (!segment || segment.walkthroughId !== walkthrough.id || segment.processingRunId !== processingRunId) throw new Error("report transcript evidence is from another run");
+      const hasValidTranscriptRange = hasStart && hasEnd
+        && Number.isFinite(evidence.sourceStartSeconds)
+        && Number.isFinite(evidence.sourceEndSeconds)
+        && evidence.sourceStartSeconds >= segment.startSeconds
+        && evidence.sourceEndSeconds <= segment.endSeconds
+        && evidence.sourceEndSeconds > evidence.sourceStartSeconds;
+      if (!hasValidTranscriptRange) throw new Error("report transcript evidence is outside its source segment");
       continue;
     }
 

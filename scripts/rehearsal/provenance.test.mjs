@@ -17,8 +17,16 @@ describe("live rehearsal provenance assertions", () => {
   });
 
   it("accepts current-run transcript evidence and rejects stale transcript evidence", () => {
-    const segments = [{ id: "segment-1", walkthroughId: "walk-1", processingRunId: "run-1" }];
+    const segments = [{ id: "segment-1", walkthroughId: "walk-1", processingRunId: "run-1", startSeconds: 10, endSeconds: 20 }];
     expect(() => validateReportObservationEvidence({ observation: baseObservation, sourceObservation, segments, mediaById: new Map(), walkthrough, processingRunId: "run-1" })).not.toThrow();
+    for (const evidence of [
+      { ...baseObservation.evidence[0], sourceStartSeconds: 9, sourceEndSeconds: 11 },
+      { ...baseObservation.evidence[0], sourceStartSeconds: 19, sourceEndSeconds: 21 },
+      { ...baseObservation.evidence[0], sourceStartSeconds: 12, sourceEndSeconds: 12 },
+      { ...baseObservation.evidence[0], sourceStartSeconds: Number.NaN },
+    ]) {
+      expect(() => validateReportObservationEvidence({ observation: { ...baseObservation, evidence: [evidence] }, sourceObservation, segments, mediaById: new Map(), walkthrough, processingRunId: "run-1" })).toThrow(/outside its source segment/);
+    }
     expect(() => validateReportObservationEvidence({ observation: baseObservation, sourceObservation, segments: [{ ...segments[0], processingRunId: "run-old" }], mediaById: new Map(), walkthrough, processingRunId: "run-1" })).toThrow(/another run/);
   });
 

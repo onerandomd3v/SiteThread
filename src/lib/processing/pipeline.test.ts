@@ -199,10 +199,16 @@ describe("COD-17 processing pipeline", () => {
   it("marks an extraction failure on redelivery without redoing media work", async () => {
     const state = scenario();
     state.run.status = "EXTRACTING_OBSERVATIONS";
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
     state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
     await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
+    const events = log.mock.calls.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>);
+    log.mockRestore();
     expect(state.run.status).toBe("PROCESSING_FAILED");
     expect(state.run.failedStep).toBe("EXTRACTING_OBSERVATIONS");
     expect(state.providerKeys).toHaveLength(0);
+    expect(events.filter((event) => event.event === "processing.run.failed")).toEqual([
+      expect.objectContaining({ event: "processing.run.failed", processingRunId: "run", walkthroughId: "walk", pipelineVersion: "mvp-upload-v1", stage: "EXTRACTING_OBSERVATIONS", errorCode: "PROVIDER_RESULT_INVALID", retryable: false }),
+    ]);
   });
 });

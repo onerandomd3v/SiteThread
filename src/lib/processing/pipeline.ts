@@ -73,6 +73,7 @@ export async function processWalkthrough(
       return;
     } catch (error) {
       const safe = serializeError(error);
+      logEvent("processing.run.failed", { processingRunId: run.id, walkthroughId: run.walkthroughId, pipelineVersion: run.pipelineVersion, stage: "EXTRACTING_OBSERVATIONS", errorCode: safe.code, retryable: safe.retryable });
       await failProcessingRunIfCurrent(runId, "EXTRACTING_OBSERVATIONS", { failedStep: "EXTRACTING_OBSERVATIONS", errorCode: safe.code, errorMessage: safe.message, retryable: safe.retryable }, database);
       throw new SiteThreadError(safe.message, safe.code, safe.retryable);
     }
