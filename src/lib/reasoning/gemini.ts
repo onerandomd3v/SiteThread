@@ -10,6 +10,8 @@ import { OBSERVATION_REASONING_CAPABILITY, type ObservationReasoner, type Observ
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_TIMEOUT_MS = 60_000;
 const GEMINI_MAX_OUTPUT_TOKENS = 4_096;
+const GEMINI_MAX_ERROR_BODY_BYTES = 8_192;
+const GEMINI_MAX_ERROR_MESSAGE_CHARS = 512;
 const GEMINI_25_THINKING_BUDGET = 512;
 
 export const GEMINI_REASONING_ATTRIBUTION = {
@@ -42,26 +44,26 @@ const responseSchema = z.object({
 type JsonSchemaValue = null | boolean | number | string | JsonSchemaValue[] | { [key: string]: JsonSchemaValue };
 type JsonSchemaObject = { [key: string]: JsonSchemaValue };
 
-const GEMINI_SCHEMA_KEYS = new Set([
+const GENERATE_CONTENT_SCHEMA_KEYS = new Set([
   "type", "properties", "required", "additionalProperties", "enum", "items",
   "minItems", "maxItems", "minimum", "maximum", "description", "title",
 ]);
 
-function supportedJsonSchema(value: JsonSchemaValue): JsonSchemaValue {
-  if (Array.isArray(value)) return value.map(supportedJsonSchema);
+function toGenerateContentSchema(value: JsonSchemaValue): JsonSchemaValue {
+  if (Array.isArray(value)) return value.map(toGenerateContentSchema);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => GEMINI_SCHEMA_KEYS.has(key))
+      .filter(([key]) => GENERATE_CONTENT_SCHEMA_KEYS.has(key))
       .map(([key, child]) => [key, key === "properties" && child && typeof child === "object" && !Array.isArray(child)
-        ? Object.fromEntries(Object.entries(child).map(([name, property]) => [name, supportedJsonSchema(property)]))
-        : supportedJsonSchema(child)]),
+        ? Object.fromEntries(Object.entries(child).map(([name, property]) => [name, toGenerateContentSchema(property)]))
+        : toGenerateContentSchema(child)]),
   );
 }
 
-function geminiOutputSchema(evidenceRefs: string[]): JsonSchemaObject {
+function generateContentOutputSchema(evidenceRefs: string[]): JsonSchemaObject {
   const sourceSchema = z.toJSONSchema(ObservationReasoningOutputSchema, { target: "draft-07" }) as unknown as JsonSchemaValue;
-  const schema = supportedJsonSchema(sourceSchema) as JsonSchemaObject;
+  const schema = toGenerateContentSchema(sourceSchema) as JsonSchemaObject;
   const properties = schema.properties as JsonSchemaObject;
   const observationItems = properties.observations as JsonSchemaObject;
   const observationSchema = observationItems.items as JsonSchemaObject;
@@ -71,6 +73,88 @@ function geminiOutputSchema(evidenceRefs: string[]): JsonSchemaObject {
   const allowedRefs = [...new Set(evidenceRefs)];
   if (allowedRefs.length > 0) referenceSchema.enum = allowedRefs;
   return schema;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readBoundedErrorBody(response: Response): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < GEMINI_MAX_ERROR_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = GEMINI_MAX_ERROR_BODY_BYTES - total;
+      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      chunks.push(chunk);
+      total += chunk.byteLength;
+      if (chunk.byteLength < value.byteLength || total === GEMINI_MAX_ERROR_BODY_BYTES) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } catch {
+    return "";
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
+function safeErrorMessage(message: string, privateValues: string[]): string {
+  const normalizedMessage = message.toLocaleLowerCase();
+  const echoesPrivateValue = privateValues.some((value) => {
+    const normalizedValue = value.toLocaleLowerCase();
+    if (normalizedValue.length === 0) return false;
+    if (normalizedMessage.includes(normalizedValue)) return true;
+
+    // Providers may echo only part of a prompt or evidence item in diagnostics.
+    const fragmentLength = Math.min(32, normalizedValue.length);
+    if (fragmentLength < 16) return false;
+    for (let index = 0; index <= normalizedValue.length - fragmentLength; index += 1) {
+      if (normalizedMessage.includes(normalizedValue.slice(index, index + fragmentLength))) return true;
+    }
+    return false;
+  });
+  if (echoesPrivateValue) {
+    return "[redacted provider error message]";
+  }
+  return sanitizeResultText(message)
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[redacted credential]")
+    .slice(0, GEMINI_MAX_ERROR_MESSAGE_CHARS);
+}
+
+async function readSafeErrorMetadata(response: Response, privateValues: string[]): Promise<SafeJson> {
+  const metadata: Record<string, unknown> = { httpStatus: response.status };
+  const bodyText = await readBoundedErrorBody(response);
+  try {
+    const root: unknown = JSON.parse(bodyText);
+    const error = isRecord(root) && isRecord(root.error) ? root.error : undefined;
+    if (error) {
+      const code = error.code;
+      if (typeof code === "number" && Number.isInteger(code)) metadata.providerErrorCode = code;
+      else if (typeof code === "string" && /^[A-Z0-9_.-]{1,80}$/i.test(code)) metadata.providerErrorCode = code;
+      if (typeof error.status === "string" && /^[A-Z0-9_]{1,80}$/i.test(error.status)) {
+        metadata.providerStatus = error.status;
+      }
+      if (typeof error.message === "string" && error.message.length > 0) {
+        metadata.providerMessage = safeErrorMessage(error.message, privateValues);
+      }
+    }
+  } catch {
+    // A non-JSON or truncated provider body contributes only the HTTP status.
+  }
+  return sanitizeProviderResponse(metadata);
 }
 
 function invalidResult(message: string, metadata: unknown = null): ProviderCallError {
@@ -122,7 +206,8 @@ export class GeminiObservationReasoner implements ObservationReasoner {
         temperature: 0,
         maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
         ...(modelThinkingConfig ? { thinkingConfig: modelThinkingConfig } : {}),
-        responseFormat: { text: { mimeType: "application/json", schema: geminiOutputSchema(evidence.map(({ ref }) => ref)) } },
+        responseMimeType: "application/json",
+        responseSchema: generateContentOutputSchema(evidence.map(({ ref }) => ref)),
       },
     };
 
@@ -144,19 +229,25 @@ export class GeminiObservationReasoner implements ObservationReasoner {
     }
 
     if (!response.ok) {
+      const errorMetadata = await readSafeErrorMetadata(response, [
+        this.apiKey,
+        REASONING_INSTRUCTION,
+        ...input.evidence.map(({ text }) => text),
+        ...evidence.map(({ text }) => text),
+      ]);
       if (response.status === 401 || response.status === 403) {
-        throw new ProviderCallError("Google Gemini authorization failed.", "PROVIDER_AUTH", false, { httpStatus: response.status });
+        throw new ProviderCallError("Google Gemini authorization failed.", "PROVIDER_AUTH", false, errorMetadata);
       }
       if (response.status === 429) {
-        throw new ProviderCallError("Google Gemini is rate limited; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, { httpStatus: response.status });
+        throw new ProviderCallError("Google Gemini is rate limited; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, errorMetadata);
       }
       if (response.status === 408) {
-        throw new ProviderCallError("Google Gemini returned a transient request timeout; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, { httpStatus: response.status });
+        throw new ProviderCallError("Google Gemini returned a transient request timeout; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, errorMetadata);
       }
       if (response.status >= 500) {
-        throw new ProviderCallError("Google Gemini returned a transient server error; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, { httpStatus: response.status });
+        throw new ProviderCallError("Google Gemini returned a transient server error; retry may be attempted explicitly.", "PROVIDER_UNAVAILABLE", true, errorMetadata);
       }
-      throw new ProviderCallError("Google Gemini rejected the reasoning request.", "PROVIDER_INVALID_INPUT", false, { httpStatus: response.status });
+      throw new ProviderCallError("Google Gemini rejected the reasoning request.", "PROVIDER_INVALID_INPUT", false, errorMetadata);
     }
 
     let raw: unknown;

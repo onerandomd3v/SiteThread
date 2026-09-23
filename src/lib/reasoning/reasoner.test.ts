@@ -15,7 +15,10 @@ const input: ObservationReasoningInput = {
 };
 
 function response(text: string, status = 200, finishReason = "STOP"): Response {
-  if (status < 200 || status >= 300) return new Response("provider error body should not be stored", { status });
+  if (status < 200 || status >= 300) {
+    const providerStatus = status === 408 ? "REQUEST_TIMEOUT" : status === 429 ? "RESOURCE_EXHAUSTED" : status >= 500 ? "INTERNAL" : status === 401 || status === 403 ? "PERMISSION_DENIED" : "INVALID_ARGUMENT";
+    return Response.json({ error: { code: status, status: providerStatus, message: text || "Provider rejected request." } }, { status });
+  }
   return Response.json({
     candidates: [{ content: { parts: [{ text }] }, finishReason }],
     modelVersion: "gemini-test-served-version",
@@ -39,10 +42,27 @@ function requestBody(requests: Array<{ url: string; init?: RequestInit }>) {
     contents: Array<{ parts: Array<{ text: string }> }>;
     generationConfig: {
       maxOutputTokens: number;
+      responseMimeType: string;
+      responseSchema: Record<string, unknown>;
       thinkingConfig?: { thinkingLevel?: string; thinkingBudget?: number };
-      responseFormat: { text: { mimeType: string; schema: Record<string, unknown> } };
     };
   };
+}
+
+const generateContentSchemaKeys = new Set([
+  "type", "properties", "required", "additionalProperties", "enum", "items",
+  "minItems", "maxItems", "minimum", "maximum", "description", "title",
+]);
+
+function collectGenerateContentSchemaKeys(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(collectGenerateContentSchemaKeys);
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, child]) => {
+    if (key === "properties" && child && typeof child === "object" && !Array.isArray(child)) {
+      return [key, ...Object.values(child).flatMap(collectGenerateContentSchemaKeys)];
+    }
+    return [key, ...collectGenerateContentSchemaKeys(child)];
+  });
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -97,7 +117,7 @@ describe("observation reasoner", () => {
     const { provider, requests } = mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "Water is visible and reported at the north doorway.", evidenceRefs: ["T0", "V0"] }] }));
     const result = await provider.extract(input);
     const body = requestBody(requests);
-    const schema = body.generationConfig.responseFormat.text.schema;
+    const schema = body.generationConfig.responseSchema;
     const observationSchema = (schema.properties as Record<string, Record<string, unknown>>).observations;
     const itemSchema = observationSchema.items as Record<string, unknown>;
     const observationProperties = itemSchema.properties as Record<string, Record<string, unknown>>;
@@ -105,7 +125,9 @@ describe("observation reasoner", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent");
     expect(new Headers(requests[0].init?.headers).get("x-goog-api-key")).toBe(apiKey);
-    expect(body.generationConfig.responseFormat.text.mimeType).toBe("application/json");
+    expect(body.generationConfig.responseMimeType).toBe("application/json");
+    expect(body.generationConfig).not.toHaveProperty("responseFormat");
+    expect(collectGenerateContentSchemaKeys(schema).every((key) => generateContentSchemaKeys.has(key))).toBe(true);
     expect(body.generationConfig.maxOutputTokens).toBe(4_096);
     expect(schema).toMatchObject({ type: "object", required: ["observations"], additionalProperties: false });
     expect(observationSchema.maxItems).toBe(20);
@@ -148,13 +170,13 @@ describe("observation reasoner", () => {
     await expect(provider.extract(input)).resolves.toMatchObject({ value: { observations: [] } });
   });
 
-  it("uses low thinking for Gemini 3.x without applying the 2.5 budget", async () => {
+  it.each(["gemini-3.7-flash", "gemini-3.8-flash"])("uses low thinking for %s without applying the 2.5 budget", async (model) => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), init });
       return response(JSON.stringify({ observations: [] }));
     }) as typeof fetch;
-    await new GeminiObservationReasoner(apiKey, "gemini-3.8-flash", fetcher).extract(input);
+    await new GeminiObservationReasoner(apiKey, model, fetcher).extract(input);
     const body = requestBody(requests);
     expect(body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
     expect(body.generationConfig.maxOutputTokens).toBe(4_096);
@@ -202,7 +224,7 @@ describe("observation reasoner", () => {
     const { provider, requests } = mockedProvider(JSON.stringify({ observations: [] }));
     await expect(provider.extract({ idempotencyKey: "empty-evidence-key", evidence: [] })).resolves.toMatchObject({ value: { observations: [] } });
     const body = requestBody(requests);
-    const schema = body.generationConfig.responseFormat.text.schema;
+    const schema = body.generationConfig.responseSchema;
     const rootProperties = schema.properties as Record<string, unknown>;
     const observationArray = rootProperties.observations as { items: { properties: Record<string, Record<string, unknown>> } };
     const observationProperties = observationArray.items.properties;
@@ -217,6 +239,8 @@ describe("observation reasoner", () => {
       .rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID", retryable: false });
     await expect(mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "", evidenceRefs: ["V0"] }] })).provider.extract(input))
       .rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID", retryable: false });
+    await expect(mockedProvider(JSON.stringify({ observations: [{ type: "note", description: "x".repeat(601), evidenceRefs: ["V0"] }] })).provider.extract(input))
+      .rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID", retryable: false });
   });
 
   it("rejects model-generated evidence refs not present in the exact invocation", async () => {
@@ -228,7 +252,7 @@ describe("observation reasoner", () => {
     });
   });
 
-  it("attributes auth failures to Gemini observation reasoning and stores only sanitized status", async () => {
+  it("attributes auth failures to Gemini observation reasoning and stores allowlisted provider details", async () => {
     const { provider } = mockedProvider("", 403);
     try {
       await provider.extract(input);
@@ -238,10 +262,120 @@ describe("observation reasoner", () => {
         code: "PROVIDER_AUTH",
         retryable: false,
         attribution: { provider: "google-gemini", capability: "observation-reasoning" },
-        rawResponse: { httpStatus: 403 },
+        rawResponse: {
+          httpStatus: 403,
+          providerErrorCode: 403,
+          providerStatus: "PERMISSION_DENIED",
+          providerMessage: "Provider rejected request.",
+        },
       });
-      expect(JSON.stringify((error as ProviderCallError).rawResponse)).not.toContain("provider error body");
       expect(JSON.stringify((error as ProviderCallError).rawResponse)).not.toContain(apiKey);
+    }
+  });
+
+  it("retains useful safe Google error details but drops arbitrary provider fields", async () => {
+    const body = Response.json({
+      error: { code: 400, status: "INVALID_ARGUMENT", message: "Invalid value at generationConfig.responseSchema." },
+      prompt: input.evidence[0].text,
+      request: { headers: { "x-goog-api-key": apiKey }, body: { contents: input.evidence } },
+      endpoint: "https://private.example/request?token=secret",
+    }, { status: 400 });
+    const fetcher = vi.fn(async () => body) as unknown as typeof fetch;
+    const provider = new GeminiObservationReasoner(apiKey, "gemini-test-model", fetcher);
+    let failure: unknown;
+    try {
+      await provider.extract(input);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "PROVIDER_INVALID_INPUT",
+      retryable: false,
+      attribution: { provider: "google-gemini", capability: "observation-reasoning" },
+      rawResponse: {
+        httpStatus: 400,
+        providerErrorCode: 400,
+        providerStatus: "INVALID_ARGUMENT",
+        providerMessage: "Invalid value at generationConfig.responseSchema.",
+      },
+    });
+    expect(body.bodyUsed).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts echoed credentials and evidence and never retains request or header payloads", async () => {
+    const echoedMessage = `Rejected evidence ${input.evidence[0].text}; credential ${apiKey}`;
+    const body = Response.json({
+      error: { code: 400, status: "INVALID_ARGUMENT", message: echoedMessage, details: [{ prompt: input.evidence[1].text }] },
+      request: { headers: { Authorization: `Bearer ${apiKey}` }, body: JSON.stringify(input) },
+    }, { status: 400 });
+    const fetcher = vi.fn(async () => body) as unknown as typeof fetch;
+    const provider = new GeminiObservationReasoner(apiKey, "gemini-test-model", fetcher);
+    let failure: unknown;
+    try {
+      await provider.extract(input);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "PROVIDER_INVALID_INPUT",
+      rawResponse: {
+        httpStatus: 400,
+        providerErrorCode: 400,
+        providerStatus: "INVALID_ARGUMENT",
+        providerMessage: "[redacted provider error message]",
+      },
+    });
+    const diagnostic = JSON.stringify((failure as ProviderCallError).rawResponse);
+    expect(diagnostic).not.toContain(apiKey);
+    expect(diagnostic).not.toContain(input.evidence[0].text);
+    expect(diagnostic).not.toContain(input.evidence[1].text);
+    expect(diagnostic).not.toContain("Authorization");
+    expect(diagnostic).not.toContain("headers");
+    expect(diagnostic).not.toContain("request");
+    expect(diagnostic).not.toContain("details");
+    expect(diagnostic.length).toBeLessThan(1_000);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts a provider error that echoes only a fragment of evidence", async () => {
+    const evidenceFragment = "reports water at the north doorway".slice(0, 32);
+    const provider = mockedProvider(`Invalid evidence: ${evidenceFragment}`, 400).provider;
+    try {
+      await provider.extract(input);
+      throw new Error("Expected invalid input failure.");
+    } catch (error) {
+      expect((error as ProviderCallError).rawResponse).toMatchObject({
+        httpStatus: 400,
+        providerMessage: "[redacted provider error message]",
+      });
+      expect(JSON.stringify((error as ProviderCallError).rawResponse)).not.toContain(evidenceFragment);
+    }
+  });
+
+  it("redacts Google API key-shaped values echoed in provider messages", async () => {
+    const googleStyleKey = `AIza${"A".repeat(30)}`;
+    const provider = mockedProvider(`Invalid credential ${googleStyleKey}`, 400).provider;
+    try {
+      await provider.extract(input);
+      throw new Error("Expected invalid input failure.");
+    } catch (error) {
+      expect((error as ProviderCallError).rawResponse).toMatchObject({
+        providerMessage: "Invalid credential [redacted credential]",
+      });
+      expect(JSON.stringify((error as ProviderCallError).rawResponse)).not.toContain(googleStyleKey);
+    }
+  });
+
+  it("truncates provider error messages while preserving the HTTP classification", async () => {
+    const provider = mockedProvider("provider detail ".repeat(100), 400).provider;
+    try {
+      await provider.extract(input);
+      throw new Error("Expected invalid input failure.");
+    } catch (error) {
+      const diagnostic = (error as ProviderCallError).rawResponse;
+      expect(diagnostic).toMatchObject({ httpStatus: 400, providerErrorCode: 400, providerStatus: "INVALID_ARGUMENT" });
+      expect((diagnostic as Record<string, string>).providerMessage.length).toBeLessThanOrEqual(512);
     }
   });
 
