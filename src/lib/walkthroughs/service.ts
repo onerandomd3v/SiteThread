@@ -7,6 +7,8 @@ import type { MediaStorage } from "@/lib/storage/types";
 import { r2MediaStorage } from "@/lib/storage/r2";
 import { MAX_WALKTHROUGH_UPLOAD_BYTES, UploadIntentRequestSchema, type UploadIntentRequest } from "./upload-policy";
 
+const FINALIZE_UPLOAD_TRANSACTION_TIMEOUT_MS = 120_000;
+
 function durableObjectKey(walkthroughId: string, assetId: string): string {
   return `walkthroughs/${walkthroughId}/source/${assetId}.mp4`;
 }
@@ -122,7 +124,7 @@ export async function finalizeUpload(walkthroughId: string, storage: MediaStorag
     });
     if (currentRun) await tx.processingRun.update({ where: { id: currentRun.id }, data: { status: "UPLOADED", errorCode: null, errorMessage: null, failedStep: null } });
     return { queued: await enqueueProcessingRun(persistedRun.id, tx), cleanupObjectKey: currentAsset.stagingObjectKey };
-  });
+  }, { timeout: FINALIZE_UPLOAD_TRANSACTION_TIMEOUT_MS });
   if (finalized.cleanupObjectKey) {
     try {
       await storage.deleteObject({ objectKey: finalized.cleanupObjectKey });

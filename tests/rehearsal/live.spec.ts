@@ -6,25 +6,53 @@ test("completes two fresh live golden-path runs", async ({ browser, baseURL }) =
   const referencePath = process.env.REHEARSAL_REFERENCE_VIDEO;
   if (!referencePath || process.env.MEDIA_PROVIDER_MODE !== "live" || process.env.LIVE_REHEARSAL !== "true") throw new Error("NOT A LIVE ACCEPTANCE RUN: explicit live rehearsal configuration is required.");
   const referenceFingerprint = process.env.REHEARSAL_REFERENCE_FINGERPRINT ?? createHash("sha256").update(await readFile(referencePath)).digest("hex");
+  const existingWalkthroughIds = (process.env.REHEARSAL_EXISTING_WALKTHROUGH_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean);
   const runs: Array<Record<string, unknown>> = [];
   for (let index = 0; index < 2; index += 1) {
     const startedAt = Date.now();
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.goto("/");
-    const projectSelect = page.locator("select");
-    await expect(projectSelect).toBeVisible();
-    if (!(await projectSelect.inputValue())) {
-      await page.getByPlaceholder("New project name").fill(`Live rehearsal ${new Date().toISOString()} ${index + 1}`);
-      await page.getByRole("button", { name: "Create" }).click();
-      await expect(projectSelect).not.toHaveValue("");
+    let walkthroughId: string;
+    const existingWalkthroughId = existingWalkthroughIds[index];
+    if (existingWalkthroughId) {
+      const finalized = await page.request.post(`/api/walkthroughs/${existingWalkthroughId}/finalize`);
+      expect(finalized.ok()).toBe(true);
+      const finalizedBody = await finalized.json() as { run?: { status?: string; failedStep?: string | null; errorCode?: string | null } };
+      if (finalizedBody.run?.status === "PROCESSING_FAILED") {
+        expect(finalizedBody.run.failedStep).toBe("ANALYZING_MEDIA");
+        expect(finalizedBody.run.errorCode).toBe("PROVIDER_UNAVAILABLE");
+        const retried = await page.request.post(`/api/walkthroughs/${existingWalkthroughId}/retry`);
+        expect(retried.ok()).toBe(true);
+        const retriedBody = await retried.json() as { run?: { status?: string } };
+        expect(retriedBody.run?.status).toBe("QUEUED");
+      }
+      walkthroughId = existingWalkthroughId;
+      await page.goto(`/walkthroughs/${walkthroughId}`);
+    } else {
+      await page.goto("/");
+      const projectSelect = page.locator("select");
+      await expect(projectSelect).toBeVisible();
+      await expect(page.getByText("Loading projects…", { exact: true })).toHaveCount(0, { timeout: 30_000 });
+      await expect(projectSelect).toBeEnabled();
+      if (!(await projectSelect.inputValue())) {
+        await page.getByPlaceholder("New project name").fill(`Live rehearsal ${new Date().toISOString()} ${index + 1}`);
+        await page.getByRole("button", { name: "Create" }).click();
+        await expect(projectSelect).not.toHaveValue("");
+      }
+      await page.locator("input[type=file]").setInputFiles(referencePath);
+      await page.getByRole("button", { name: "Upload walkthrough" }).click();
+      // The approved reference video is large and upload throughput varies; this wait
+      // covers the upload plus server-side verification and finalization.
+      await expect(page).toHaveURL(/\/walkthroughs\/[^/]+$/, { timeout: 15 * 60_000 });
+      walkthroughId = new URL(page.url()).pathname.split("/").pop() ?? "";
+      if (!walkthroughId) throw new Error("The live upload did not produce a walkthrough ID.");
     }
-    await page.locator("input[type=file]").setInputFiles(referencePath);
-    await page.getByRole("button", { name: "Upload walkthrough" }).click();
-    await expect(page).toHaveURL(/\/walkthroughs\/[^/]+$/, { timeout: 120_000 });
-    const walkthroughId = new URL(page.url()).pathname.split("/").pop();
-    if (!walkthroughId) throw new Error("The live upload did not produce a walkthrough ID.");
-    await expect(page.getByRole("heading", { name: "Ready for your review" })).toBeVisible({ timeout: 2 * 60 * 60 * 1000 });
+    const readyForReview = page.getByRole("heading", { name: "Ready for your review" });
+    const emptyReview = page.getByText("No findings selected for report.", { exact: true });
+    const processingFailure = page.getByText("This walkthrough needs attention before findings can be prepared.", { exact: true });
+    await expect.poll(async () => (await readyForReview.isVisible()) || (await emptyReview.isVisible()) || (await processingFailure.isVisible()), { timeout: 2 * 60 * 60 * 1000 }).toBe(true);
+    if (await processingFailure.isVisible()) throw new Error("The live walkthrough failed before findings were ready for review.");
+    if (await emptyReview.isVisible()) throw new Error("The live walkthrough produced no grounded findings for the review/report path.");
     const findings = page.locator('article[data-testid^="finding-"]');
     await expect.poll(() => findings.count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(3);
     const findingCount = await findings.count();

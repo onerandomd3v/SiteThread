@@ -66,6 +66,10 @@ describe("observation extraction persistence", () => {
       { mediaAssetId: "clip-1", sourceStartSeconds: 1, sourceEndSeconds: 3, label: "Visual evidence 00:01–00:03" },
     ] });
     expect(state.invocations[0]).toMatchObject({ stage: "EXTRACTING_OBSERVATIONS", capability: "observation-reasoning", status: "SUCCEEDED", sourceStartSeconds: 0, sourceEndSeconds: 6 });
+    expect(state.invocations[0].rawResponse).toMatchObject({
+      fixture: true,
+      siteThreadReasoning: { candidateCount: 1, groundedCount: 1 },
+    });
     expect(state.reasonerInputs[0]).toEqual({
       idempotencyKey: expect.stringMatching(/^[a-f0-9]{64}$/),
       evidence: [
@@ -92,6 +96,9 @@ describe("observation extraction persistence", () => {
     await extractObservations("run-1", { database: state.database, reasoner: state.reasoner });
     expect(state.created).toHaveLength(0);
     expect(state.run.status).toBe("NEEDS_REVIEW");
+    expect(state.invocations[0].rawResponse).toMatchObject({
+      siteThreadReasoning: { candidateCount: 1, groundedCount: 0 },
+    });
   });
 
   it("rejects a reasoner diagnostic that changes the caller-derived idempotency key", async () => {

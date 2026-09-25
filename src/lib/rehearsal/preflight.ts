@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { promisify } from "node:util";
-import { MAX_WALKTHROUGH_UPLOAD_BYTES } from "../walkthroughs/upload-policy";
+import { MAX_WALKTHROUGH_UPLOAD_BYTES } from "../walkthroughs/upload-policy.ts";
 
 const exec = promisify(execFile);
 

@@ -49,6 +49,18 @@ export async function extractObservations(
   const grounded = groundReasonedObservations(result.value, context);
   const range = invocationRange(context);
   const diagnostic: ProviderDiagnostic = result.diagnostic;
+  const diagnosticFields = diagnostic.rawResponse !== null
+    && typeof diagnostic.rawResponse === "object"
+    && !Array.isArray(diagnostic.rawResponse)
+    ? diagnostic.rawResponse
+    : { providerResponse: diagnostic.rawResponse };
+  const diagnosticWithGroundingCounts = {
+    ...diagnosticFields,
+    siteThreadReasoning: {
+      candidateCount: result.value.observations.length,
+      groundedCount: grounded.length,
+    },
+  };
 
   await database.$transaction(async (transaction) => {
     const claimed = await transaction.processingRun.updateMany({
@@ -63,7 +75,7 @@ export async function extractObservations(
       },
     });
     if (claimed.count !== 1) return;
-    const rawResponse = sanitizeProviderResponse(diagnostic.rawResponse) as Prisma.InputJsonValue;
+    const rawResponse = sanitizeProviderResponse(diagnosticWithGroundingCounts) as Prisma.InputJsonValue;
     await transaction.providerInvocation.upsert({
       where: { idempotencyKey },
       create: {

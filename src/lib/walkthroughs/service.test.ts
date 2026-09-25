@@ -76,7 +76,9 @@ describe("walkthrough upload service", () => {
       $queryRaw: async () => [],
     } as unknown as typeof db;
     let transactionTail = Promise.resolve();
-    database.$transaction = (async (callback: unknown) => {
+    let transactionTimeout: number | undefined;
+    database.$transaction = (async (callback: unknown, options?: { timeout?: number }) => {
+      transactionTimeout = options?.timeout;
       let release!: () => void;
       const turn = new Promise<void>((resolve) => { release = resolve; });
       const previous = transactionTail;
@@ -99,6 +101,7 @@ describe("walkthrough upload service", () => {
     expect(second.id).toBe(first.id);
     expect(promoteCount).toBe(1);
     expect(deleteCount).toBe(1);
+    expect(transactionTimeout).toBe(120_000);
     expect(asset.status).toBe("AVAILABLE");
     expect(asset.objectKey).toContain("/source/");
     expect(asset.stagingObjectKey).toBeNull();
