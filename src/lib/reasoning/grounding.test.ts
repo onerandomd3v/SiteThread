@@ -72,6 +72,26 @@ describe("observation evidence grounding", () => {
     expect(drafts[0].sourceBasis).toBe(sourceBasis);
   });
 
+  it("rejects an unsupported compound candidate while accepting separate minimal-ref atomic candidates", () => {
+    const compound = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is reported at the north doorway and installed conduit is visible.",
+      evidenceRefs: ["T0"],
+    }]), context());
+    expect(compound).toEqual([]);
+
+    const atomic = groundReasonedObservations(output([
+      { type: "potential_issue", description: "The supervisor reports water at the north doorway.", evidenceRefs: ["T0"] },
+      { type: "note", description: "Installed conduit is visible.", evidenceRefs: ["V1"] },
+    ]), context());
+    expect(atomic).toHaveLength(2);
+    expect(atomic.map(({ sourceBasis }) => sourceBasis)).toEqual(["NARRATION", "VISUAL"]);
+    expect(atomic.map(({ evidence }) => evidence.map(({ sourceStartSeconds, sourceEndSeconds }) => [sourceStartSeconds, sourceEndSeconds]))).toEqual([
+      [[6, 12]],
+      [[18, 24]],
+    ]);
+  });
+
   it("uses real transcript identity and a validated visual event range", () => {
     const drafts = groundReasonedObservations(output([{
       type: "note",
