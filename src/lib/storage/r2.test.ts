@@ -151,6 +151,110 @@ describe("R2 source downloads", () => {
     }
   });
 
+  it("accepts an async-iterable GET body that is not a Node Readable instance", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
+    vi.stubEnv("R2_ACCOUNT_ID", "test-account");
+    vi.stubEnv("R2_BUCKET_NAME", "test-bucket");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "test-access-key");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "test-secret-key");
+    const payload = Buffer.from("cross-runtime source media");
+    const body = (async function* () { yield payload; })();
+    expect(body).not.toBeInstanceOf(Readable);
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation((async (command: unknown) => {
+      if (!(command instanceof GetObjectCommand)) throw new Error("Expected a get command.");
+      return { Body: body };
+    }) as S3Client["send"]);
+    const directory = await mkdtemp(join(tmpdir(), "sitethread-r2-download-test-"));
+    const filePath = join(directory, "source.mp4");
+
+    try {
+      await r2MediaStorage.downloadToFile({ objectKey: "walkthroughs/test/source.mp4", filePath });
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(await readFile(filePath)).toEqual(payload);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a source GET once after a protocol-level connection failure", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
+    vi.stubEnv("R2_ACCOUNT_ID", "test-account");
+    vi.stubEnv("R2_BUCKET_NAME", "test-bucket");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "test-access-key");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "test-secret-key");
+    const payload = Buffer.from("protocol retry source media");
+    const send = vi.spyOn(S3Client.prototype, "send")
+      .mockRejectedValueOnce(Object.assign(new Error("protocol failure"), { code: "EPROTO" }))
+      .mockImplementationOnce((async (command: unknown) => {
+        if (!(command instanceof GetObjectCommand)) throw new Error("Expected a get command.");
+        return { Body: Readable.from([payload]) };
+      }) as S3Client["send"]);
+    const directory = await mkdtemp(join(tmpdir(), "sitethread-r2-download-test-"));
+    const filePath = join(directory, "source.mp4");
+
+    try {
+      await r2MediaStorage.downloadToFile({ objectKey: "walkthroughs/test/source.mp4", filePath });
+
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(await readFile(filePath)).toEqual(payload);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a status-less R2 transport error once with a fresh GET", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
+    vi.stubEnv("R2_ACCOUNT_ID", "test-account");
+    vi.stubEnv("R2_BUCKET_NAME", "test-bucket");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "test-access-key");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "test-secret-key");
+    const payload = Buffer.from("retryable R2 transport source");
+    const send = vi.spyOn(S3Client.prototype, "send")
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockImplementationOnce((async (command: unknown) => {
+        if (!(command instanceof GetObjectCommand)) throw new Error("Expected a get command.");
+        return { Body: Readable.from([payload]) };
+      }) as S3Client["send"]);
+    const directory = await mkdtemp(join(tmpdir(), "sitethread-r2-download-test-"));
+    const filePath = join(directory, "source.mp4");
+
+    try {
+      await r2MediaStorage.downloadToFile({ objectKey: "walkthroughs/test/source.mp4", filePath });
+
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(await readFile(filePath)).toEqual(payload);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("converts a Web ReadableStream GET body to a Node stream", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
+    vi.stubEnv("R2_ACCOUNT_ID", "test-account");
+    vi.stubEnv("R2_BUCKET_NAME", "test-bucket");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "test-access-key");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "test-secret-key");
+    const payload = Buffer.from("web-stream source media");
+    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(payload); controller.close(); } });
+    Object.defineProperty(body, Symbol.asyncIterator, { value: undefined });
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation((async (command: unknown) => {
+      if (!(command instanceof GetObjectCommand)) throw new Error("Expected a get command.");
+      return { Body: body };
+    }) as S3Client["send"]);
+    const directory = await mkdtemp(join(tmpdir(), "sitethread-r2-download-test-"));
+    const filePath = join(directory, "source.mp4");
+
+    try {
+      await r2MediaStorage.downloadToFile({ objectKey: "walkthroughs/test/source.mp4", filePath });
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(await readFile(filePath)).toEqual(payload);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not retry a non-transient source download rejection", async () => {
     vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
     vi.stubEnv("R2_ACCOUNT_ID", "test-account");

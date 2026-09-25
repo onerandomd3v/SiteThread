@@ -56,17 +56,30 @@ function isRetryableR2RequestError(error: unknown): boolean {
     "ERR_STREAM_PREMATURE_CLOSE",
     "ENETUNREACH",
     "EAI_AGAIN",
+    "EPROTO",
   ]);
   let current: unknown = error;
+  let receivedHttpStatus = false;
+  let receivedExplicitCode = false;
+  let unclassifiedError = false;
   for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
-    const record = current as { code?: unknown; $metadata?: { httpStatusCode?: unknown }; cause?: unknown; name?: unknown };
+    const record = current as { code?: unknown; Code?: unknown; $metadata?: { httpStatusCode?: unknown }; cause?: unknown; name?: unknown };
     const status = record.$metadata?.httpStatusCode;
-    if (status === 408 || status === 429 || (typeof status === "number" && status >= 500)) return true;
-    if (typeof record.code === "string" && retryableCodes.has(record.code)) return true;
+    const errorCode = record.code ?? record.Code;
+    if (typeof status === "number") {
+      receivedHttpStatus = true;
+      if (status === 408 || status === 429 || status >= 500) return true;
+    }
+    if (typeof errorCode === "string") {
+      receivedExplicitCode = true;
+      if (retryableCodes.has(errorCode)) return true;
+    }
+    if (record.name === "Error") unclassifiedError = true;
     if (record.name === "TimeoutError" || record.name === "AbortError") return true;
     current = record.cause;
   }
-  return false;
+  // GET is read-only; PUT retries use the same object key and a fresh file stream.
+  return unclassifiedError && !receivedHttpStatus && !receivedExplicitCode;
 }
 
 function logR2Failure(operation: "download" | "upload", error: unknown, retryable: boolean): void {
@@ -75,12 +88,24 @@ function logR2Failure(operation: "download" | "upload", error: unknown, retryabl
   let status: number | undefined;
   for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
     const record = current as { code?: unknown; Code?: unknown; name?: unknown; $metadata?: { httpStatusCode?: unknown }; cause?: unknown };
-    const candidate = record.Code ?? record.code;
-    if (typeof candidate === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(candidate) && (!errorCode || record.name === "SiteThreadError")) errorCode = candidate;
+    const candidate = record.Code ?? record.code ?? record.name;
+    if (typeof candidate === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(candidate) && (!errorCode || errorCode === "MEDIA_UNAVAILABLE" || record.name === "SiteThreadError")) errorCode = candidate;
     if (typeof record.$metadata?.httpStatusCode === "number" && record.$metadata.httpStatusCode >= 100 && record.$metadata.httpStatusCode <= 599) status = record.$metadata.httpStatusCode;
     current = record.cause;
   }
   logEvent(`storage.r2.${operation}.failed`, { errorCode: errorCode ?? "UNKNOWN", status: status ?? null, retryable });
+}
+
+function toNodeReadable(body: unknown): Readable {
+  if (body instanceof Readable) return body;
+  if (body && typeof body === "object" && Symbol.asyncIterator in body && typeof body[Symbol.asyncIterator] === "function") {
+    return Readable.from(body as AsyncIterable<Uint8Array>);
+  }
+  if (body && typeof body === "object" && "getReader" in body && typeof body.getReader === "function") {
+    return Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+  }
+  const error = Object.assign(new Error("Unsupported R2 response body stream."), { code: "R2_BODY_UNSUPPORTED" });
+  throw new SiteThreadError("The source media is unavailable.", "MEDIA_UNAVAILABLE", false, { cause: error });
 }
 
 export class R2MediaStorage implements ProcessingMediaStorage {
@@ -161,8 +186,7 @@ export class R2MediaStorage implements ProcessingMediaStorage {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: input.objectKey }));
-        if (!(result.Body instanceof Readable)) throw new SiteThreadError("The source media is unavailable.", "MEDIA_UNAVAILABLE");
-        await pipeline(result.Body, createWriteStream(input.filePath));
+        await pipeline(toNodeReadable(result.Body), createWriteStream(input.filePath));
         return;
       } catch (error) {
         if (attempt === 0 && isRetryableR2RequestError(error)) continue;
