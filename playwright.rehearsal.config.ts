@@ -7,7 +7,9 @@ const local = new URL(baseURL).hostname === "localhost";
 export default defineConfig({
   testDir: "./tests/rehearsal",
   fullyParallel: false,
-  timeout: 2 * 60 * 60 * 1000,
+  // Two sequential runs each allow 15 minutes for upload plus 2 hours to reach review,
+  // with additional time for the review and report checks.
+  timeout: 5 * 60 * 60 * 1000,
   reporter: "list",
   use: { baseURL, trace: "retain-on-failure", ...devices["Desktop Chrome"] },
   projects: [{ name: "live-chromium", use: { ...devices["Desktop Chrome"] } }],

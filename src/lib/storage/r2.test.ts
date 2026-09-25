@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { Readable } from "node:stream";
 
 const { captureClientConfig } = vi.hoisted(() => ({ captureClientConfig: vi.fn() }));
 
@@ -54,23 +55,47 @@ describe("R2 upload signature verification", () => {
     }));
   });
 
-  it("uses a replayable bounded request for small temporary derivatives", async () => {
+  it("reopens a bounded upload stream when a transient R2 failure is retried", async () => {
     vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
     vi.stubEnv("R2_ACCOUNT_ID", "test-account");
     vi.stubEnv("R2_BUCKET_NAME", "test-bucket");
     vi.stubEnv("R2_ACCESS_KEY_ID", "test-access-key");
     vi.stubEnv("R2_SECRET_ACCESS_KEY", "test-secret-key");
-    const send = vi.spyOn(S3Client.prototype, "send").mockResolvedValue({} as never);
+    const streams: Readable[] = [];
+    const payloads: Buffer[] = [];
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation((async (command: unknown) => {
+      if (!(command instanceof PutObjectCommand)) throw new Error("Expected a put command.");
+      if (!(command.input.Body instanceof Readable)) throw new Error("Expected a streaming upload body.");
+      streams.push(command.input.Body);
+      const chunks: Buffer[] = [];
+      for await (const chunk of command.input.Body) chunks.push(Buffer.from(chunk));
+      payloads.push(Buffer.concat(chunks));
+      if (streams.length === 1) throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+      return {};
+    }) as S3Client["send"]);
 
     const result = await r2MediaStorage.putFile({ objectKey: "temporary/audio.wav", filePath: "package.json", mimeType: "audio/wav" });
 
     expect(result.byteSize).toBeGreaterThan(0);
     expect(captureClientConfig).toHaveBeenCalledWith(expect.objectContaining({
-      maxAttempts: 2,
+      maxAttempts: 1,
       requestHandler: expect.objectContaining({ requestTimeout: 20_000, throwOnRequestTimeout: true }),
     }));
-    const command = send.mock.calls[0]?.[0];
-    if (!(command instanceof PutObjectCommand)) throw new Error("Expected one S3 put command.");
-    expect(command.input.Body).toBeInstanceOf(Uint8Array);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(streams[0]).not.toBe(streams[1]);
+    expect(payloads[1]).toEqual(payloads[0]);
+  });
+
+  it("does not retry a non-transient R2 upload rejection", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
+    vi.stubEnv("R2_ACCOUNT_ID", "test-account");
+    vi.stubEnv("R2_BUCKET_NAME", "test-bucket");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "test-access-key");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "test-secret-key");
+    const send = vi.spyOn(S3Client.prototype, "send").mockRejectedValue(Object.assign(new Error("forbidden"), { $metadata: { httpStatusCode: 403 } }));
+
+    await expect(r2MediaStorage.putFile({ objectKey: "temporary/audio.wav", filePath: "package.json", mimeType: "audio/wav" })).rejects.toMatchObject({ code: "MEDIA_UNAVAILABLE" });
+
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

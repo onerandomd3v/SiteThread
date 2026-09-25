@@ -1,7 +1,7 @@
 import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createWriteStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseServerEnv } from "@/lib/config/env";
@@ -22,7 +22,7 @@ export function hasMp4Ftyp(bytes: Uint8Array): boolean {
   return false;
 }
 
-function createR2Client(options: { maxAttempts?: number } = {}): { client: S3Client; bucket: string } {
+function createR2Client(): { client: S3Client; bucket: string } {
   const env = parseServerEnv();
   if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
     throw new SiteThreadError("Private media storage is not configured.", "INTERNAL_ERROR", false);
@@ -33,7 +33,7 @@ function createR2Client(options: { maxAttempts?: number } = {}): { client: S3Cli
       region: "auto",
       endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
       credentials: { accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY },
-      maxAttempts: options.maxAttempts ?? 1,
+      maxAttempts: 1,
       requestHandler: {
         connectionTimeout: 5_000,
         requestTimeout: R2_REQUEST_TIMEOUT_MS,
@@ -42,6 +42,30 @@ function createR2Client(options: { maxAttempts?: number } = {}): { client: S3Cli
       },
     }),
   };
+}
+
+function isRetryableR2UploadError(error: unknown): boolean {
+  const retryableCodes = new Set([
+    "ECONNABORTED",
+    "ECONNRESET",
+    "EHOSTUNREACH",
+    "EPIPE",
+    "ETIMEDOUT",
+    "ERR_STREAM_DESTROYED",
+    "ERR_STREAM_PREMATURE_CLOSE",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+  ]);
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    const record = current as { code?: unknown; $metadata?: { httpStatusCode?: unknown }; cause?: unknown; name?: unknown };
+    const status = record.$metadata?.httpStatusCode;
+    if (status === 408 || status === 429 || (typeof status === "number" && status >= 500)) return true;
+    if (typeof record.code === "string" && retryableCodes.has(record.code)) return true;
+    if (record.name === "TimeoutError" || record.name === "AbortError") return true;
+    current = record.cause;
+  }
+  return false;
 }
 
 export class R2MediaStorage implements ProcessingMediaStorage {
@@ -131,11 +155,19 @@ export class R2MediaStorage implements ProcessingMediaStorage {
   }
 
   async putFile(input: { objectKey: string; filePath: string; mimeType: string }): Promise<{ byteSize: number }> {
-    const { client, bucket } = createR2Client({ maxAttempts: 2 });
+    const { client, bucket } = createR2Client();
     try {
-      const body = await readFile(input.filePath);
-      await client.send(new PutObjectCommand({ Bucket: bucket, Key: input.objectKey, Body: body, ContentLength: body.byteLength, ContentType: input.mimeType }));
-      return { byteSize: body.byteLength };
+      const file = await stat(input.filePath);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await client.send(new PutObjectCommand({ Bucket: bucket, Key: input.objectKey, Body: createReadStream(input.filePath), ContentLength: file.size, ContentType: input.mimeType }));
+          return { byteSize: file.size };
+        } catch (error) {
+          if (attempt === 0 && isRetryableR2UploadError(error)) continue;
+          throw error;
+        }
+      }
+      throw new Error("The bounded R2 upload retry limit was exceeded.");
     } catch (error) {
       throw new SiteThreadError("A private media derivative could not be stored.", "MEDIA_UNAVAILABLE", true, { cause: error });
     }
