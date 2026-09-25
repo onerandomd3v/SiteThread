@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseServerEnv } from "@/lib/config/env";
 import { SiteThreadError } from "@/lib/errors";
+import { logEvent } from "@/lib/observability/log";
 import type { ProcessingMediaStorage, MediaObject, UploadIntent } from "./types";
 
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
@@ -44,7 +45,7 @@ function createR2Client(): { client: S3Client; bucket: string } {
   };
 }
 
-function isRetryableR2UploadError(error: unknown): boolean {
+function isRetryableR2RequestError(error: unknown): boolean {
   const retryableCodes = new Set([
     "ECONNABORTED",
     "ECONNRESET",
@@ -66,6 +67,20 @@ function isRetryableR2UploadError(error: unknown): boolean {
     current = record.cause;
   }
   return false;
+}
+
+function logR2Failure(operation: "download" | "upload", error: unknown, retryable: boolean): void {
+  let current: unknown = error;
+  let errorCode: string | undefined;
+  let status: number | undefined;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    const record = current as { code?: unknown; Code?: unknown; name?: unknown; $metadata?: { httpStatusCode?: unknown }; cause?: unknown };
+    const candidate = record.Code ?? record.code;
+    if (typeof candidate === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(candidate) && (!errorCode || record.name === "SiteThreadError")) errorCode = candidate;
+    if (typeof record.$metadata?.httpStatusCode === "number" && record.$metadata.httpStatusCode >= 100 && record.$metadata.httpStatusCode <= 599) status = record.$metadata.httpStatusCode;
+    current = record.cause;
+  }
+  logEvent(`storage.r2.${operation}.failed`, { errorCode: errorCode ?? "UNKNOWN", status: status ?? null, retryable });
 }
 
 export class R2MediaStorage implements ProcessingMediaStorage {
@@ -143,14 +158,19 @@ export class R2MediaStorage implements ProcessingMediaStorage {
 
   async downloadToFile(input: { objectKey: string; filePath: string }): Promise<void> {
     const { client, bucket } = createR2Client();
-    try {
-      const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: input.objectKey }));
-      if (!(result.Body instanceof Readable)) throw new SiteThreadError("The source media is unavailable.", "MEDIA_UNAVAILABLE");
-      await pipeline(result.Body, createWriteStream(input.filePath));
-    } catch (error) {
-      if (error instanceof SiteThreadError) throw error;
-      const status = error && typeof error === "object" && "$metadata" in error ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode : undefined;
-      throw new SiteThreadError("The private source media could not be read.", "MEDIA_UNAVAILABLE", status !== 404, { cause: error });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: input.objectKey }));
+        if (!(result.Body instanceof Readable)) throw new SiteThreadError("The source media is unavailable.", "MEDIA_UNAVAILABLE");
+        await pipeline(result.Body, createWriteStream(input.filePath));
+        return;
+      } catch (error) {
+        if (attempt === 0 && isRetryableR2RequestError(error)) continue;
+        const retryable = error instanceof SiteThreadError ? error.retryable : isRetryableR2RequestError(error);
+        logR2Failure("download", error, retryable);
+        if (error instanceof SiteThreadError) throw error;
+        throw new SiteThreadError("The private source media could not be read.", "MEDIA_UNAVAILABLE", retryable, { cause: error });
+      }
     }
   }
 
@@ -163,13 +183,15 @@ export class R2MediaStorage implements ProcessingMediaStorage {
           await client.send(new PutObjectCommand({ Bucket: bucket, Key: input.objectKey, Body: createReadStream(input.filePath), ContentLength: file.size, ContentType: input.mimeType }));
           return { byteSize: file.size };
         } catch (error) {
-          if (attempt === 0 && isRetryableR2UploadError(error)) continue;
+          if (attempt === 0 && isRetryableR2RequestError(error)) continue;
           throw error;
         }
       }
       throw new Error("The bounded R2 upload retry limit was exceeded.");
     } catch (error) {
-      throw new SiteThreadError("A private media derivative could not be stored.", "MEDIA_UNAVAILABLE", true, { cause: error });
+      const retryable = isRetryableR2RequestError(error);
+      logR2Failure("upload", error, retryable);
+      throw new SiteThreadError("A private media derivative could not be stored.", "MEDIA_UNAVAILABLE", retryable, { cause: error });
     }
   }
 }
