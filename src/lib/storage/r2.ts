@@ -10,6 +10,7 @@ import type { ProcessingMediaStorage, MediaObject, UploadIntent } from "./types"
 
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 const SIGNATURE_RANGE = "bytes=0-63";
+const R2_REQUEST_TIMEOUT_MS = 20_000;
 
 export function hasMp4Ftyp(bytes: Uint8Array): boolean {
   const limit = Math.min(bytes.length - 12, 32);
@@ -32,6 +33,13 @@ function createR2Client(): { client: S3Client; bucket: string } {
       region: "auto",
       endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
       credentials: { accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY },
+      maxAttempts: 1,
+      requestHandler: {
+        connectionTimeout: 5_000,
+        requestTimeout: R2_REQUEST_TIMEOUT_MS,
+        throwOnRequestTimeout: true,
+        socketTimeout: R2_REQUEST_TIMEOUT_MS,
+      },
     }),
   };
 }
