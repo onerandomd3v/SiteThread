@@ -343,7 +343,7 @@ function requiredEvidenceKind(clause: string): ReasoningEvidence["kind"] | undef
   return undefined;
 }
 
-function groundedEvidenceFragments(description: string, resolved: Array<ReasoningEvidence>): { description: string[]; trade: string[] } | undefined {
+function groundedEvidenceFragments(description: string, resolved: Array<ReasoningEvidence>): { description: string[]; trade: string[]; evidence: ReasoningEvidence[] } | undefined {
   if (UNSUPPORTED_CLAIM.test(description) || UNSUPPORTED_REMEDIATION.test(description)) return undefined;
   const clauses = splitGroundingClauses(description.replace(/\s+\b(?:and\s+)?(?:requires?|needs?)\s+(?:a\s+)?(?:professional|site\s+supervisor|supervisor)?\s*(?:review|follow[- ]?up)\b/gi, ""));
   const matchedEvidence = new Set<ReasoningEvidence>();
@@ -362,12 +362,11 @@ function groundedEvidenceFragments(description: string, resolved: Array<Reasonin
       matchedFragments.push(match.fragment);
     }
   }
-  if (resolved.some((evidence) => !matchedEvidence.has(evidence))) return undefined;
   const tradeFragments = [...matchedFragments];
   for (const evidence of matchedEvidence) {
     tradeFragments.push(...evidenceClauses(evidence.text).filter((fragment) => REVIEW_CONTEXT.test(fragment)));
   }
-  return { description: matchedFragments, trade: tradeFragments };
+  return { description: matchedFragments, trade: tradeFragments, evidence: [...matchedEvidence] };
 }
 
 function isSuggestedActionAllowed(value: string): boolean {
@@ -435,13 +434,16 @@ export function groundReasonedObservations(
   }
 
   return output.observations.flatMap((observation) => {
-    const resolved = observation.evidenceRefs.map((ref) => context.references.get(ref)!);
     const reasoningEvidence = context.evidence.filter((evidence) => observation.evidenceRefs.includes(evidence.ref));
     const matchedEvidenceFragments = groundedEvidenceFragments(observation.description, reasoningEvidence);
     if (!matchedEvidenceFragments) return [];
     if (observation.suggestedAction && !isSuggestedActionAllowed(observation.suggestedAction)) return [];
-    const hasNarration = resolved.some((evidence) => evidence.kind === "transcript");
-    const hasVisual = resolved.some((evidence) => evidence.kind === "visual");
+    const groundedRefSet = new Set(matchedEvidenceFragments.evidence.map((evidence) => evidence.ref));
+    const groundedReferences = observation.evidenceRefs
+      .filter((ref) => groundedRefSet.has(ref))
+      .map((ref) => context.references.get(ref)!);
+    const hasNarration = matchedEvidenceFragments.evidence.some((evidence) => evidence.kind === "transcript");
+    const hasVisual = matchedEvidenceFragments.evidence.some((evidence) => evidence.kind === "visual");
     const locationEvidenceText = matchedEvidenceFragments.description.join("\n");
     const tradeEvidenceText = matchedEvidenceFragments.trade.join("\n");
     const sourceBasis = hasNarration && hasVisual ? "NARRATION_AND_VISUAL" : hasNarration ? "NARRATION" : "VISUAL";
@@ -453,7 +455,7 @@ export function groundReasonedObservations(
       ...(isGroundedOptionalValue(observation.trade, tradeEvidenceText) ? { trade: observation.trade } : {}),
       ...(observation.confidence === undefined ? {} : { confidence: observation.confidence }),
       ...(observation.suggestedAction ? { suggestedAction: observation.suggestedAction } : {}),
-      evidence: resolved.map((evidence) => {
+      evidence: groundedReferences.map((evidence) => {
         const durable = { ...evidence };
         Reflect.deleteProperty(durable, "kind");
         return durable;
