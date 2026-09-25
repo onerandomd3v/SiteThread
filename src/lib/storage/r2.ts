@@ -1,7 +1,7 @@
 import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createReadStream, createWriteStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseServerEnv } from "@/lib/config/env";
@@ -22,7 +22,7 @@ export function hasMp4Ftyp(bytes: Uint8Array): boolean {
   return false;
 }
 
-function createR2Client(): { client: S3Client; bucket: string } {
+function createR2Client(options: { maxAttempts?: number } = {}): { client: S3Client; bucket: string } {
   const env = parseServerEnv();
   if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
     throw new SiteThreadError("Private media storage is not configured.", "INTERNAL_ERROR", false);
@@ -33,7 +33,7 @@ function createR2Client(): { client: S3Client; bucket: string } {
       region: "auto",
       endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
       credentials: { accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY },
-      maxAttempts: 1,
+      maxAttempts: options.maxAttempts ?? 1,
       requestHandler: {
         connectionTimeout: 5_000,
         requestTimeout: R2_REQUEST_TIMEOUT_MS,
@@ -131,11 +131,11 @@ export class R2MediaStorage implements ProcessingMediaStorage {
   }
 
   async putFile(input: { objectKey: string; filePath: string; mimeType: string }): Promise<{ byteSize: number }> {
-    const { client, bucket } = createR2Client();
+    const { client, bucket } = createR2Client({ maxAttempts: 2 });
     try {
-      const file = await stat(input.filePath);
-      await client.send(new PutObjectCommand({ Bucket: bucket, Key: input.objectKey, Body: createReadStream(input.filePath), ContentLength: file.size, ContentType: input.mimeType }));
-      return { byteSize: file.size };
+      const body = await readFile(input.filePath);
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: input.objectKey, Body: body, ContentLength: body.byteLength, ContentType: input.mimeType }));
+      return { byteSize: body.byteLength };
     } catch (error) {
       throw new SiteThreadError("A private media derivative could not be stored.", "MEDIA_UNAVAILABLE", true, { cause: error });
     }

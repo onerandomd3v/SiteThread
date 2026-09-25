@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 const { captureClientConfig } = vi.hoisted(() => ({ captureClientConfig: vi.fn() }));
 
@@ -19,6 +20,7 @@ import { hasMp4Ftyp, r2MediaStorage } from "./r2";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   captureClientConfig.mockClear();
 });
 
@@ -50,5 +52,25 @@ describe("R2 upload signature verification", () => {
         socketTimeout: 20_000,
       },
     }));
+  });
+
+  it("uses a replayable bounded request for small temporary derivatives", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://test:test@localhost:5432/test");
+    vi.stubEnv("R2_ACCOUNT_ID", "test-account");
+    vi.stubEnv("R2_BUCKET_NAME", "test-bucket");
+    vi.stubEnv("R2_ACCESS_KEY_ID", "test-access-key");
+    vi.stubEnv("R2_SECRET_ACCESS_KEY", "test-secret-key");
+    const send = vi.spyOn(S3Client.prototype, "send").mockResolvedValue({} as never);
+
+    const result = await r2MediaStorage.putFile({ objectKey: "temporary/audio.wav", filePath: "package.json", mimeType: "audio/wav" });
+
+    expect(result.byteSize).toBeGreaterThan(0);
+    expect(captureClientConfig).toHaveBeenCalledWith(expect.objectContaining({
+      maxAttempts: 2,
+      requestHandler: expect.objectContaining({ requestTimeout: 20_000, throwOnRequestTimeout: true }),
+    }));
+    const command = send.mock.calls[0]?.[0];
+    if (!(command instanceof PutObjectCommand)) throw new Error("Expected one S3 put command.");
+    expect(command.input.Body).toBeInstanceOf(Uint8Array);
   });
 });
