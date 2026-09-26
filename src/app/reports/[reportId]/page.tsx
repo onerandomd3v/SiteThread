@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { PrintReportButton } from "@/components/print-report-button";
 import { ReportEvidenceFrame } from "@/components/report-evidence-frame";
+import { SiteThreadError } from "@/lib/errors";
 import { getReport } from "@/lib/reports/service";
 import type { ReportFinding } from "@/lib/schemas/report";
 
@@ -49,7 +51,13 @@ function Finding({ finding }: { finding: ReportFinding }) {
 
 export default async function ReportPage({ params }: { params: Promise<{ reportId: string }> }) {
   const { reportId } = await params;
-  const report = await getReport(reportId);
+  let report: Awaited<ReturnType<typeof getReport>>;
+  try {
+    report = await getReport(reportId);
+  } catch (error) {
+    if (error instanceof SiteThreadError && error.code === "NOT_FOUND") notFound();
+    throw error;
+  }
   return <main className="report-page mx-auto flex min-h-screen max-w-4xl flex-col gap-8 px-6 py-10">
     <div className="report-print-controls flex items-center justify-between gap-4"><Link href={`/walkthroughs/${report.walkthrough.id}`} className="text-sm font-semibold text-slate-600 underline">← Back to walkthrough</Link><PrintReportButton /></div>
     <header className="space-y-4 border-b border-slate-300 pb-6">
