@@ -322,7 +322,7 @@ export async function generateReport(walkthroughId: string, dependencies: Report
     const transitioned = await transaction.processingRun.updateMany({ where: { id: run.id, status: "REVIEWED" }, data: { status: "REPORT_READY", completedAt: generatedAt } });
     if (transitioned.count !== 1) throw new SiteThreadError("The walkthrough changed while the report was being generated.", "CONFLICT");
     return { report: await mapReport(created, database), event: { walkthroughId, processingRunId: run.id, reportId, outcome: "created" as const } };
-  });
+  }, { maxWait: 5_000, timeout: 15_000 });
   logEvent("report.generated", result.event);
   return result.report;
 }

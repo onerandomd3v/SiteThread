@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SiteThreadError } from "@/lib/errors";
 import { ReportObservationSnapshotSchema } from "@/lib/schemas/media";
 import { SiteReportSchema } from "@/lib/schemas/report";
-import { buildReportSnapshot, frameOffsetSeconds, getReport, reportIdForSnapshot, type ReportSourceRecord } from "./service";
+import { buildReportSnapshot, frameOffsetSeconds, generateReport, getReport, reportIdForSnapshot, type ReportSourceRecord } from "./service";
 
 function sourceObservation(overrides: Partial<ReportSourceRecord> = {}): ReportSourceRecord {
   return {
@@ -91,6 +91,19 @@ describe("COD-20 report service", () => {
   it("maps a cited visual clip midpoint to a deterministic frame offset", () => {
     expect(frameOffsetSeconds(12, 16, 10, 20)).toBe(4);
     expect(() => frameOffsetSeconds(2, 4, 10, 20)).toThrow(SiteThreadError);
+  });
+
+  it("uses bounded acquisition and execution time for report persistence", async () => {
+    let transactionOptions: unknown;
+    const database = {
+      $transaction: async (callback: (transaction: unknown) => Promise<unknown>, options: unknown) => {
+        transactionOptions = options;
+        return callback({ processingRun: { findFirst: async () => null } });
+      },
+    };
+
+    await expect(generateReport("missing", { database: database as never })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(transactionOptions).toEqual({ maxWait: 5_000, timeout: 15_000 });
   });
 
   it("keeps report DTOs limited to confirmed and edited findings and round-trips dates", () => {

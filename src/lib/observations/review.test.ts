@@ -12,6 +12,7 @@ function fixture() {
   const evidence = { id: "evidence-1", observationId: "observation-1", mediaAssetId: "asset-1", transcriptSegmentId: "segment-1", sourceStartSeconds: 12, sourceEndSeconds: 18, label: "Narration 0:12–0:18", mediaAsset: { id: "asset-1", walkthroughId: "walk-1", kind: "SOURCE_VIDEO", status: "AVAILABLE", objectKey: "walkthroughs/walk-1/source.mp4", mimeType: "video/mp4", sourceStartSeconds: null, sourceEndSeconds: null, visualCandidates }, transcriptSegment: transcript as typeof transcript | null, createdAt: reviewedAt };
   const observations = [{ id: "observation-1", walkthroughId: "walk-1", processingRunId: "run-current", sequence: 0, type: "POTENTIAL_ISSUE", sourceBasis: "NARRATION", originalDraftText: "Water is visible beside the doorway.", suggestedAction: "Ask the site supervisor to review the visible condition.", editedText: null as string | null, location: null, trade: null, confidence: 0.8, reviewState: "DRAFT", reviewerId: null as string | null, reviewedAt: null as Date | null, evidence: [evidence] }];
   const signedUrls: string[] = [];
+  const transactionOptions: unknown[] = [];
   const storage = { createReadUrl: async ({ assetId }: { assetId: string }) => { signedUrls.push(assetId); return "https://media.test/temporary"; } } as unknown as MediaStorage;
   const database = {
     processingRun: {
@@ -36,9 +37,12 @@ function fixture() {
     },
     walkthrough: { findUnique: async () => ({ id: "walk-1" }) },
     $queryRaw: async () => [],
-    $transaction: async (callback: unknown) => (callback as (transaction: typeof database) => Promise<unknown>)(database),
+    $transaction: async (callback: unknown, options?: unknown) => {
+      transactionOptions.push(options);
+      return (callback as (transaction: typeof database) => Promise<unknown>)(database);
+    },
   } as unknown as typeof db;
-  return { database, storage, observations, run, signedUrls, reviewedAt };
+  return { database, storage, observations, run, signedUrls, reviewedAt, transactionOptions };
 }
 
 describe("COD-19 finding review", () => {
@@ -51,6 +55,7 @@ describe("COD-19 finding review", () => {
     expect(result.observation.evidence[0]).toMatchObject({ mediaAvailability: "AVAILABLE", mediaUrl: "https://media.test/temporary" });
     expect(state.signedUrls).toContain("walkthroughs/walk-1/source.mp4");
     expect(result.review).toMatchObject({ reviewedCount: 1, remainingDrafts: 0, complete: true, runStatus: "REVIEWED" });
+    expect(state.transactionOptions).toEqual([{ maxWait: 5_000, timeout: 15_000 }]);
   });
 
   it("edits only on explicit save and keeps the original draft", async () => {

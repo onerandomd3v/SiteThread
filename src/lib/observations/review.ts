@@ -234,5 +234,5 @@ export async function reviewObservation(
     if (!finalObservation) throw new SiteThreadError("The observation was not found for this walkthrough run.", "NOT_FOUND");
     const review = await reviewSnapshot(transaction, finalRun, storage);
     return { observation: await mapObservation(finalObservation, storage, finalRun.id), review };
-  });
+  }, { maxWait: 5_000, timeout: 15_000 });
 }
