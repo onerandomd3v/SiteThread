@@ -424,6 +424,7 @@ export function buildReasoningContext(input: {
 export function groundReasonedObservations(
   output: ObservationReasoningOutput,
   context: ObservationReasoningContext,
+  onEvidenceReferencesValidated?: () => void,
 ): GroundedObservation[] {
   for (const observation of output.observations) {
     for (const ref of observation.evidenceRefs) {
@@ -432,6 +433,8 @@ export function groundReasonedObservations(
       }
     }
   }
+
+  onEvidenceReferencesValidated?.();
 
   return output.observations.flatMap((observation) => {
     const reasoningEvidence = context.evidence.filter((evidence) => observation.evidenceRefs.includes(evidence.ref));

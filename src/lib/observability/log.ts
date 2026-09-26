@@ -17,6 +17,14 @@ const SAFE_FIELDS = new Set([
   "outcome",
   "reportId",
   "keyHash",
+  "phase",
+  "errorName",
+  "errorCategory",
+  "validationIssues",
+  "candidateCount",
+  "groundedCount",
+  "httpStatus",
+  "providerErrorCode",
 ]);
 
 export function safeIdHash(value: string): string {
