@@ -32,4 +32,9 @@ describe("server environment contract", () => {
     expect(() => parseServerEnv({ ...requiredValues, LIVEPEER_MCP_URL: "not-a-url" })).toThrow();
     expect(() => parseServerEnv({ ...requiredValues, R2_BUCKET_NAME: "" })).toThrow();
   });
+
+  it("defaults to fixture mode and accepts explicit live mode", () => {
+    expect(parseServerEnv(requiredValues).MEDIA_PROVIDER_MODE).toBe("fixture");
+    expect(parseServerEnv({ ...requiredValues, MEDIA_PROVIDER_MODE: "live" }).MEDIA_PROVIDER_MODE).toBe("live");
+  });
 });

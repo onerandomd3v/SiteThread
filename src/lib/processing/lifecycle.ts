@@ -1,5 +1,6 @@
 import { ProcessingStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db/client";
+import { logEvent } from "@/lib/observability/log";
 import type { ProcessingJob } from "./types";
 
 export const PIPELINE_VERSION = "mvp-upload-v1";
@@ -55,11 +56,16 @@ export async function retryProcessingRun(runId: string, database: Prisma.Transac
   const current = await database.processingRun.findUnique({ where: { id: runId } });
   if (!current) throw new Error("Processing run not found.");
   if (current.status !== "PROCESSING_FAILED") return { id: current.id, walkthroughId: current.walkthroughId, status: current.status };
-  await database.processingRun.updateMany({
+  const claimed = await database.processingRun.updateMany({
     where: { id: runId, status: "PROCESSING_FAILED" },
     data: { status: "QUEUED", retryCount: { increment: 1 }, failedStep: null, errorCode: null, errorMessage: null, retryable: null },
   });
+  if (claimed.count !== 1) {
+    const currentRun = await database.processingRun.findUniqueOrThrow({ where: { id: runId } });
+    return { id: currentRun.id, walkthroughId: currentRun.walkthroughId, status: currentRun.status };
+  }
   const updated = await database.processingRun.findUniqueOrThrow({ where: { id: runId } });
+  logEvent("processing.retry.requested", { processingRunId: updated.id, walkthroughId: updated.walkthroughId, pipelineVersion: updated.pipelineVersion, retryCount: updated.retryCount, stage: current.failedStep ?? "unknown" });
   return { id: updated.id, walkthroughId: updated.walkthroughId, status: updated.status };
 }
 

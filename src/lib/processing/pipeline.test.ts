@@ -24,6 +24,7 @@ function scenario(failVisualOnce = false, failTranscription = false) {
   const transitions: string[] = [];
   const providerKeys: string[] = [];
   let visualCalls = 0;
+  let reasonerCalls = 0;
   let capabilityDiscoveries = 0;
   const database = {
     processingRun: {
@@ -104,9 +105,9 @@ function scenario(failVisualOnce = false, failTranscription = false) {
     },
   };
   const reasoner: ObservationReasoner = {
-    extract: async (input) => ({ value: { observations: [] }, diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }),
+    extract: async (input) => { reasonerCalls += 1; return { value: { observations: [] }, diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: { fixture: true }, latencyMs: 0 } }; },
   };
-  return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get visualCalls() { return visualCalls; }, get capabilityDiscoveries() { return capabilityDiscoveries; } };
+  return { database, storage, media, provider, reasoner, run, segments, candidates, invocations, observations, transitions, providerKeys, get reasonerCalls() { return reasonerCalls; }, get visualCalls() { return visualCalls; }, get capabilityDiscoveries() { return capabilityDiscoveries; } };
 }
 
 describe("COD-17 processing pipeline", () => {
@@ -150,7 +151,21 @@ describe("COD-17 processing pipeline", () => {
     expect(state.invocations.get(state.providerKeys[0])).toMatchObject({ provider: "livepeer", capability: "creative/transcribe", status: "FAILED" });
   });
 
-  it("keeps transcript windows from another pipeline run and resumes a redelivered worker", async () => {
+  it("claims a queued run once when two workers overlap", async () => {
+    const state = scenario();
+    await Promise.all([
+      processWalkthrough("run", { ...state, reasoner: state.reasoner }),
+      processWalkthrough("run", { ...state, reasoner: state.reasoner }),
+    ]);
+    expect(state.providerKeys).toHaveLength(3);
+    expect(state.reasonerCalls).toBe(1);
+    expect(state.segments.size).toBe(2);
+    expect(state.candidates.size).toBe(1);
+    expect(state.observations).toHaveLength(0);
+    expect(state.run.status).toBe("NEEDS_REVIEW");
+  });
+
+  it("resumes processing stages on redelivery and skips transcription discovery at visual stage", async () => {
     const state = scenario();
     const oldIdentity = { processingRunId: "older-run", sourceAssetId: "source", startSeconds: 0, endSeconds: 6 };
     state.segments.set(JSON.stringify(oldIdentity), { ...oldIdentity, walkthroughId: "walk", sequence: 0, text: "Earlier version" });
@@ -181,13 +196,19 @@ describe("COD-17 processing pipeline", () => {
     vi.unstubAllEnvs();
   });
 
-  it("marks an extraction failure at EXTRACTING_OBSERVATIONS without redoing media work", async () => {
+  it("marks an extraction failure on redelivery without redoing media work", async () => {
     const state = scenario();
     state.run.status = "EXTRACTING_OBSERVATIONS";
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
     state.reasoner.extract = async (input) => ({ value: { observations: [{ type: "note", description: "Untrusted", evidenceRefs: ["T99"] }] }, diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 } });
     await expect(processWalkthrough("run", { ...state, reasoner: state.reasoner })).rejects.toMatchObject({ code: "PROVIDER_RESULT_INVALID" });
+    const events = log.mock.calls.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>);
+    log.mockRestore();
     expect(state.run.status).toBe("PROCESSING_FAILED");
     expect(state.run.failedStep).toBe("EXTRACTING_OBSERVATIONS");
     expect(state.providerKeys).toHaveLength(0);
+    expect(events.filter((event) => event.event === "processing.run.failed")).toEqual([
+      expect.objectContaining({ event: "processing.run.failed", processingRunId: "run", walkthroughId: "walk", pipelineVersion: "mvp-upload-v1", stage: "EXTRACTING_OBSERVATIONS", errorCode: "PROVIDER_RESULT_INVALID", retryable: false }),
+    ]);
   });
 });

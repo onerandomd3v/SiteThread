@@ -49,7 +49,7 @@ describe("walkthrough upload service", () => {
     expect(finalized.uploadUrl).toBeNull();
   });
 
-  it("promotes before availability, deletes staging, and keeps finalization idempotent", async () => {
+  it("serializes concurrent finalization before promotion and keeps it idempotent", async () => {
     const asset = { id: "asset-1", walkthroughId: "walk-1", kind: "SOURCE_VIDEO", status: "PENDING", objectKey: "walkthroughs/walk-1/source/asset-1.mp4", stagingObjectKey: "walkthroughs/walk-1/staging/asset-1.mp4", mimeType: "video/mp4", byteSize: 1024 };
     type FakeRun = { id: string; walkthroughId: string; pipelineVersion: string; idempotencyKey: string; status: string; retryCount: number; failedStep: null; errorCode: null; errorMessage: null; updatedAt: Date };
     let run: FakeRun | null = null;
@@ -57,27 +57,51 @@ describe("walkthrough upload service", () => {
     let deleteCount = 0;
     const database = {
       walkthrough: { findUnique: async () => ({ id: "walk-1", mediaAssets: [asset], processingRuns: run ? [run] : [] }) },
-      mediaAsset: { update: async ({ data }: { data: Partial<typeof asset> }) => Object.assign(asset, data) },
+      mediaAsset: {
+        findUnique: async () => ({ ...asset }),
+        update: async ({ data }: { data: Partial<typeof asset> }) => Object.assign(asset, data),
+        updateMany: async ({ where, data }: { where: { id: string; status: string; stagingObjectKey: string }; data: Partial<typeof asset> }) => {
+          if (asset.id !== where.id || asset.status !== where.status || asset.stagingObjectKey !== where.stagingObjectKey) return { count: 0 };
+          Object.assign(asset, data);
+          return { count: 1 };
+        },
+      },
       processingRun: {
         upsert: async ({ create }: { create: FakeRun }) => { if (!run) { const created = create; run = { id: created.id, walkthroughId: created.walkthroughId, pipelineVersion: created.pipelineVersion, idempotencyKey: created.idempotencyKey, status: created.status, retryCount: 0, failedStep: null, errorCode: null, errorMessage: null, updatedAt: new Date() }; } return run; },
         findUnique: async () => run,
         findUniqueOrThrow: async () => run,
         update: async ({ data }: { data: Partial<NonNullable<typeof run>> }) => { run = { ...run as NonNullable<typeof run>, ...data, updatedAt: new Date() }; return run; },
       },
-      $transaction: async (callback: unknown) => (callback as (tx: typeof database) => Promise<unknown>)(database),
+      $transaction: async () => undefined,
+      $queryRaw: async () => [],
     } as unknown as typeof db;
+    let transactionTail = Promise.resolve();
+    let transactionTimeout: number | undefined;
+    database.$transaction = (async (callback: unknown, options?: { timeout?: number }) => {
+      transactionTimeout = options?.timeout;
+      let release!: () => void;
+      const turn = new Promise<void>((resolve) => { release = resolve; });
+      const previous = transactionTail;
+      transactionTail = transactionTail.then(() => turn);
+      await previous;
+      try {
+        return await (callback as (tx: typeof database) => Promise<unknown>)(database);
+      } finally {
+        release();
+      }
+    }) as typeof database.$transaction;
     const storage = storageFake({
-      promoteUpload: async () => { promoteCount += 1; },
+      promoteUpload: async () => { await new Promise((resolve) => setTimeout(resolve, 5)); promoteCount += 1; },
       deleteObject: async () => { deleteCount += 1; },
     });
 
-    const first = await finalizeUpload("walk-1", storage, database);
-    const second = await finalizeUpload("walk-1", storage, database);
+    const [first, second] = await Promise.all([finalizeUpload("walk-1", storage, database), finalizeUpload("walk-1", storage, database)]);
 
     expect(first.status).toBe("QUEUED");
     expect(second.id).toBe(first.id);
     expect(promoteCount).toBe(1);
     expect(deleteCount).toBe(1);
+    expect(transactionTimeout).toBe(120_000);
     expect(asset.status).toBe("AVAILABLE");
     expect(asset.objectKey).toContain("/source/");
     expect(asset.stagingObjectKey).toBeNull();
@@ -88,6 +112,7 @@ describe("walkthrough upload service", () => {
     let promoted = false;
     const database = {
       walkthrough: { findUnique: async () => ({ id: "walk-1", mediaAssets: [asset], processingRuns: [] }) },
+      $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({ $queryRaw: async () => [], mediaAsset: { findUnique: async () => asset }, processingRun: { findUnique: async () => null } }),
     } as unknown as typeof db;
     const storage = storageFake({
       verifyUpload: async () => { throw new SiteThreadError("invalid MP4", "MEDIA_UNAVAILABLE"); },
@@ -104,6 +129,7 @@ describe("walkthrough upload service", () => {
     let promoted = false;
     const database = {
       walkthrough: { findUnique: async () => ({ id: "walk-1", mediaAssets: [asset], processingRuns: [] }) },
+      $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({ $queryRaw: async () => [], mediaAsset: { findUnique: async () => asset }, processingRun: { findUnique: async () => null } }),
     } as unknown as typeof db;
     const storage = storageFake({
       verifyUpload: async () => ({ byteSize: 1024, mimeType: "video/mp4", etag: "" }),

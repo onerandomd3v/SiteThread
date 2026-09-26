@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { db } from "@/lib/db/client";
 import { canTransitionProcessingStatus, failProcessingRunIfCurrent, retryProcessingRun } from "./lifecycle";
+import { logEvent } from "@/lib/observability/log";
+
+vi.mock("@/lib/observability/log", () => ({ logEvent: vi.fn() }));
 
 describe("processing lifecycle", () => {
   it("allows the upload and durable queue transitions", () => {
@@ -32,6 +35,7 @@ describe("processing lifecycle", () => {
     await Promise.all([retryProcessingRun("run", database), retryProcessingRun("run", database)]);
     expect(run.retryCount).toBe(1);
     expect(run.status).toBe("QUEUED");
+    expect(logEvent).toHaveBeenCalledTimes(1);
   });
 
   it("does not replace a completed extraction with a late failure", async () => {

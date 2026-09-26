@@ -72,6 +72,26 @@ describe("observation evidence grounding", () => {
     expect(drafts[0].sourceBasis).toBe(sourceBasis);
   });
 
+  it("rejects an unsupported compound candidate while accepting separate minimal-ref atomic candidates", () => {
+    const compound = groundReasonedObservations(output([{
+      type: "note",
+      description: "Water is reported at the north doorway and installed conduit is visible.",
+      evidenceRefs: ["T0"],
+    }]), context());
+    expect(compound).toEqual([]);
+
+    const atomic = groundReasonedObservations(output([
+      { type: "potential_issue", description: "The supervisor reports water at the north doorway.", evidenceRefs: ["T0"] },
+      { type: "note", description: "Installed conduit is visible.", evidenceRefs: ["V1"] },
+    ]), context());
+    expect(atomic).toHaveLength(2);
+    expect(atomic.map(({ sourceBasis }) => sourceBasis)).toEqual(["NARRATION", "VISUAL"]);
+    expect(atomic.map(({ evidence }) => evidence.map(({ sourceStartSeconds, sourceEndSeconds }) => [sourceStartSeconds, sourceEndSeconds]))).toEqual([
+      [[6, 12]],
+      [[18, 24]],
+    ]);
+  });
+
   it("uses real transcript identity and a validated visual event range", () => {
     const drafts = groundReasonedObservations(output([{
       type: "note",
@@ -82,6 +102,44 @@ describe("observation evidence grounding", () => {
       { transcriptSegmentId: "segment-db-id", mediaAssetId: "source-video", sourceStartSeconds: 6, sourceEndSeconds: 12, label: "Narration 00:06–00:12" },
       { mediaAssetId: "clip-db-id", sourceStartSeconds: 7, sourceEndSeconds: 9, label: "Visual evidence 00:07–00:09" },
     ]);
+  });
+
+  it("keeps a grounded observation while dropping cited evidence that supports none of its claims", () => {
+    const citationContext = buildReasoningContext({
+      transcriptSegments: [{
+        id: "supported-transcript",
+        sourceAssetId: "source-walkthrough",
+        sequence: 0,
+        startSeconds: 12,
+        endSeconds: 18,
+        text: "The supervisor reports water at the doorway.",
+      }],
+      visualCandidates: [{
+        id: "unrelated-visual",
+        mediaAssetId: "unrelated-clip",
+        sourceStartSeconds: 24,
+        sourceEndSeconds: 30,
+        eventStartSeconds: 25,
+        eventEndSeconds: 27,
+        text: "Installed conduit is visible.",
+      }],
+    });
+
+    const drafts = groundReasonedObservations(output([{
+      type: "potential_issue",
+      description: "The supervisor reports water at the doorway.",
+      evidenceRefs: ["T0", "V0"],
+    }]), citationContext);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ sourceBasis: "NARRATION", description: "The supervisor reports water at the doorway." });
+    expect(drafts[0].evidence).toEqual([{
+      transcriptSegmentId: "supported-transcript",
+      mediaAssetId: "source-walkthrough",
+      sourceStartSeconds: 12,
+      sourceEndSeconds: 18,
+      label: "Narration 00:12–00:18",
+    }]);
   });
 
   it("falls back to the full SiteThread visual clip range when an event range is invalid", () => {
@@ -633,13 +691,15 @@ describe("observation evidence grounding", () => {
     expect(drafts).toEqual([]);
   });
 
-  it("rejects an unrelated cited evidence item instead of upgrading source basis", () => {
+  it("drops an unrelated citation without upgrading the supported narration source basis", () => {
     const drafts = groundReasonedObservations(output([{
       type: "note",
       description: "Water is reported at the north doorway.",
       evidenceRefs: ["T0", "V1"],
     }]), context());
-    expect(drafts).toEqual([]);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].sourceBasis).toBe("NARRATION");
+    expect(drafts[0].evidence).toEqual([expect.objectContaining({ transcriptSegmentId: "segment-db-id" })]);
   });
 
   it("does not derive optional location from an unrelated evidence clause", () => {
