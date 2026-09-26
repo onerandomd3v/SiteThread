@@ -8,6 +8,7 @@ import type { ProviderDiagnostic } from "@/lib/livepeer/types";
 import { sanitizeProviderResponse } from "@/lib/livepeer/sanitize";
 import { logEvent } from "@/lib/observability/log";
 import { buildReasoningContext, groundReasonedObservations } from "./grounding";
+import type { GroundingRejectionReason } from "./grounding";
 import { configuredObservationReasoner } from "./reasoner";
 import type { ObservationReasoner } from "./types";
 
@@ -118,10 +119,22 @@ export async function extractObservations(
   logEvent("observation.reasoning.provider_response_validated", { processingRunId: runId, stage: "EXTRACTING_OBSERVATIONS", provider, capability });
   phase = "ground_observations";
   logEvent("observation.reasoning.grounding_started", { processingRunId: runId, stage: "EXTRACTING_OBSERVATIONS" });
+  const rejectedCandidateCounts: Partial<Record<GroundingRejectionReason, number>> = {};
   const grounded = groundReasonedObservations(result.value, context, () => {
     logEvent("observation.reasoning.evidence_references_validated", { processingRunId: runId, stage: "EXTRACTING_OBSERVATIONS" });
+  }, (reason) => {
+    rejectedCandidateCounts[reason] = (rejectedCandidateCounts[reason] ?? 0) + 1;
   });
-  logEvent("observation.reasoning.grounding_completed", { processingRunId: runId, stage: "EXTRACTING_OBSERVATIONS", candidateCount: result.value.observations.length, groundedCount: grounded.length });
+  logEvent("observation.reasoning.grounding_completed", {
+    processingRunId: runId,
+    stage: "EXTRACTING_OBSERVATIONS",
+    candidateCount: result.value.observations.length,
+    groundedCount: grounded.length,
+    rejectedUnsupportedClaimCount: rejectedCandidateCounts.unsupported_claim ?? 0,
+    rejectedUnsupportedRemediationCount: rejectedCandidateCounts.unsupported_remediation ?? 0,
+    rejectedEvidenceNotGroundedCount: rejectedCandidateCounts.evidence_not_grounded ?? 0,
+    rejectedSuggestedActionCount: rejectedCandidateCounts.suggested_action_not_allowed ?? 0,
+  });
   phase = "prepare_persistence";
   const range = invocationRange(context);
   const diagnostic: ProviderDiagnostic = result.diagnostic;

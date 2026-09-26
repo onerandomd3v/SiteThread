@@ -38,6 +38,24 @@ function output(observations: ObservationReasoningOutput["observations"]): Obser
 }
 
 describe("observation evidence grounding", () => {
+  it("reports only stable rejection categories for candidates it drops", () => {
+    const rejected: string[] = [];
+    const drafts = groundReasonedObservations(output([
+      { type: "note", description: "A structural crack is visible in the beam.", evidenceRefs: ["V0"] },
+      { type: "note", description: "The supervisor reports repair at the north doorway.", evidenceRefs: ["T0"] },
+      { type: "note", description: "A cobalt crane is positioned on the roof.", evidenceRefs: ["V0"] },
+      { type: "note", description: "Water is visible beside the north doorway.", suggestedAction: "Repair the leak immediately.", evidenceRefs: ["V0"] },
+    ]), context(), undefined, (reason) => rejected.push(reason));
+
+    expect(drafts).toEqual([]);
+    expect(rejected).toEqual([
+      "unsupported_claim",
+      "unsupported_remediation",
+      "evidence_not_grounded",
+      "suggested_action_not_allowed",
+    ]);
+  });
+
   it("gives the reasoner only labeled normalized text evidence", () => {
     const built = context();
     expect(built.evidence).toEqual([

@@ -179,8 +179,10 @@ describe("observation extraction persistence", () => {
 
   it("persists no unsupported drafts but still reaches review", async () => {
     const state = scenario();
+    const output = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const privateCandidateText = "private diagnostic phrase cobalt crane at west wing";
     state.reasoner.extract = async (input) => ({
-      value: { observations: [{ type: "potential_issue", description: "A structural crack is visible in the beam.", evidenceRefs: ["V0"] }] },
+      value: { observations: [{ type: "potential_issue", description: privateCandidateText, evidenceRefs: ["V0"] }] },
       diagnostic: { provider: "fixture", capability: "observation-reasoning", idempotencyKey: input.idempotencyKey, rawResponse: {}, latencyMs: 0 },
     });
     await extractObservations("run-1", { database: state.database, reasoner: state.reasoner });
@@ -189,6 +191,12 @@ describe("observation extraction persistence", () => {
     expect(state.invocations[0].rawResponse).toMatchObject({
       siteThreadReasoning: { candidateCount: 1, groundedCount: 0 },
     });
+    const logged = output.mock.calls.map(([line]) => String(line)).join("\n");
+    const groundingEvent = output.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as { event: string; rejectedEvidenceNotGroundedCount?: number })
+      .find((event) => event.event === "observation.reasoning.grounding_completed");
+    expect(groundingEvent?.rejectedEvidenceNotGroundedCount).toBe(1);
+    expect(logged).not.toContain(privateCandidateText);
   });
 
   it("rejects a reasoner diagnostic that changes the caller-derived idempotency key", async () => {

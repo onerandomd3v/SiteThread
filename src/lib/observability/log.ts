@@ -23,6 +23,10 @@ const SAFE_FIELDS = new Set([
   "validationIssues",
   "candidateCount",
   "groundedCount",
+  "rejectedUnsupportedClaimCount",
+  "rejectedUnsupportedRemediationCount",
+  "rejectedEvidenceNotGroundedCount",
+  "rejectedSuggestedActionCount",
   "httpStatus",
   "providerErrorCode",
 ]);
