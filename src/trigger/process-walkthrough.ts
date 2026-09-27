@@ -3,6 +3,7 @@ import { processWalkthrough } from "@/lib/processing/pipeline";
 
 export const processWalkthroughTask = task({
   id: "process-walkthrough",
+  machine: "medium-1x",
   queue: { concurrencyLimit: 1 },
   retry: { maxAttempts: 1 },
   maxDuration: 7200,
