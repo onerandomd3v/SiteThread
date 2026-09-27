@@ -54,6 +54,12 @@ export interface GroundedObservation {
   evidence: Array<Omit<DurableEvidence, "kind">>;
 }
 
+export type GroundingRejectionReason =
+  | "unsupported_claim"
+  | "unsupported_remediation"
+  | "evidence_not_grounded"
+  | "suggested_action_not_allowed";
+
 const TYPE_MAP = {
   progress: "PROGRESS",
   potential_issue: "POTENTIAL_ISSUE",
@@ -343,8 +349,19 @@ function requiredEvidenceKind(clause: string): ReasoningEvidence["kind"] | undef
   return undefined;
 }
 
-function groundedEvidenceFragments(description: string, resolved: Array<ReasoningEvidence>): { description: string[]; trade: string[]; evidence: ReasoningEvidence[] } | undefined {
-  if (UNSUPPORTED_CLAIM.test(description) || UNSUPPORTED_REMEDIATION.test(description)) return undefined;
+function groundedEvidenceFragments(
+  description: string,
+  resolved: Array<ReasoningEvidence>,
+  onRejected?: (reason: GroundingRejectionReason) => void,
+): { description: string[]; trade: string[]; evidence: ReasoningEvidence[] } | undefined {
+  if (UNSUPPORTED_CLAIM.test(description)) {
+    onRejected?.("unsupported_claim");
+    return undefined;
+  }
+  if (UNSUPPORTED_REMEDIATION.test(description)) {
+    onRejected?.("unsupported_remediation");
+    return undefined;
+  }
   const clauses = splitGroundingClauses(description.replace(/\s+\b(?:and\s+)?(?:requires?|needs?)\s+(?:a\s+)?(?:professional|site\s+supervisor|supervisor)?\s*(?:review|follow[- ]?up)\b/gi, ""));
   const matchedEvidence = new Set<ReasoningEvidence>();
   const matchedFragments: string[] = [];
@@ -356,7 +373,10 @@ function groundedEvidenceFragments(description: string, resolved: Array<Reasonin
         .filter((fragment) => matchesEvidenceFragment(clause, fragment))
         .map((fragment) => ({ evidence, fragment }));
     });
-    if (matches.length === 0) return undefined;
+    if (matches.length === 0) {
+      onRejected?.("evidence_not_grounded");
+      return undefined;
+    }
     for (const match of matches) {
       matchedEvidence.add(match.evidence);
       matchedFragments.push(match.fragment);
@@ -425,6 +445,7 @@ export function groundReasonedObservations(
   output: ObservationReasoningOutput,
   context: ObservationReasoningContext,
   onEvidenceReferencesValidated?: () => void,
+  onCandidateRejected?: (reason: GroundingRejectionReason) => void,
 ): GroundedObservation[] {
   for (const observation of output.observations) {
     for (const ref of observation.evidenceRefs) {
@@ -438,9 +459,12 @@ export function groundReasonedObservations(
 
   return output.observations.flatMap((observation) => {
     const reasoningEvidence = context.evidence.filter((evidence) => observation.evidenceRefs.includes(evidence.ref));
-    const matchedEvidenceFragments = groundedEvidenceFragments(observation.description, reasoningEvidence);
+    const matchedEvidenceFragments = groundedEvidenceFragments(observation.description, reasoningEvidence, onCandidateRejected);
     if (!matchedEvidenceFragments) return [];
-    if (observation.suggestedAction && !isSuggestedActionAllowed(observation.suggestedAction)) return [];
+    if (observation.suggestedAction && !isSuggestedActionAllowed(observation.suggestedAction)) {
+      onCandidateRejected?.("suggested_action_not_allowed");
+      return [];
+    }
     const groundedRefSet = new Set(matchedEvidenceFragments.evidence.map((evidence) => evidence.ref));
     const groundedReferences = observation.evidenceRefs
       .filter((ref) => groundedRefSet.has(ref))
